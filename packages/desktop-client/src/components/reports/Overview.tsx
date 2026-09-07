@@ -66,6 +66,7 @@ import { MarkdownCard } from './reports/MarkdownCard';
 import { MissingReportCard } from './reports/MissingReportCard';
 import { MonteCarloCard } from './reports/monte-carlo/MonteCarloCard';
 import { NetWorthCard } from './reports/NetWorthCard';
+import { PlanCard } from './reports/PlanCard';
 import { SankeyCard } from './reports/SankeyCard';
 import { SpendingCard } from './reports/SpendingCard';
 import { SummaryCard } from './reports/SummaryCard';
@@ -116,6 +117,7 @@ export function Overview({ dashboard }: OverviewProps) {
   const budgetAnalysisReportEnabled = useFeatureFlag('budgetAnalysisReport');
   const balanceForecastReportEnabled = useFeatureFlag('balanceForecastReport');
   const monteCarloReportEnabled = useFeatureFlag('monteCarloReport');
+  const planPageEnabled = useFeatureFlag('planPage');
 
   const formulaMode = useFeatureFlag('formulaMode');
 
@@ -594,6 +596,14 @@ export function Overview({ dashboard }: OverviewProps) {
                               name: 'age-of-money-card' as const,
                               text: t('Age of Money'),
                             },
+                            ...(planPageEnabled
+                              ? [
+                                  {
+                                    name: 'plan-card' as const,
+                                    text: t('Plan summary'),
+                                  },
+                                ]
+                              : []),
                             {
                               name: 'spending-card' as const,
                               text: t('Spending analysis'),
@@ -816,6 +826,15 @@ export function Overview({ dashboard }: OverviewProps) {
                             widgetId={item.i}
                             isEditing={isEditing}
                             accounts={accounts}
+                            meta={widget.meta}
+                            onMetaChange={newMeta =>
+                              onMetaChange(item, newMeta)
+                            }
+                          />
+                        ) : widget.type === 'plan-card' && planPageEnabled ? (
+                          <PlanCard
+                            widgetId={item.i}
+                            isEditing={isEditing}
                             meta={widget.meta}
                             onMetaChange={newMeta =>
                               onMetaChange(item, newMeta)

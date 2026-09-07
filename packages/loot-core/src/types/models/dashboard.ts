@@ -293,6 +293,16 @@ export type AgeOfMoneyWidget = AbstractWidget<
   } | null
 >;
 
+export type PlanWidget = AbstractWidget<
+  'plan-card',
+  {
+    name?: string;
+    /** Absent means the current month. */
+    month?: string;
+    showLongTermGoals?: boolean;
+  } | null
+>;
+
 type SpecializedWidget =
   | NetWorthWidget
   | CashFlowWidget
@@ -306,7 +316,8 @@ type SpecializedWidget =
   | FormulaWidget
   | SankeyWidget
   | AgeOfMoneyWidget
-  | BalanceForecastWidget;
+  | BalanceForecastWidget
+  | PlanWidget;
 export type DashboardWidgetEntity = SpecializedWidget | CustomReportWidget;
 export type NewDashboardWidgetEntity = Omit<
   DashboardWidgetEntity,

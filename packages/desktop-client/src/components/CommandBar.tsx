@@ -5,6 +5,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import {
   SvgCog,
   SvgLibrary,
+  SvgMoneyBag,
   SvgPiggyBank,
   SvgReports,
   SvgStoreFront,
@@ -25,6 +26,7 @@ import { Command } from 'cmdk';
 
 import { useAccounts } from '#hooks/useAccounts';
 import { useDashboardPages } from '#hooks/useDashboardPages';
+import { useFeatureFlag } from '#hooks/useFeatureFlag';
 import { useMetadataPref } from '#hooks/useMetadataPref';
 import { useModalState } from '#hooks/useModalState';
 import { useNavigate } from '#hooks/useNavigate';
@@ -101,9 +103,14 @@ export function CommandBar() {
   const { modalStack } = useModalState();
   const { startTour } = useTour();
 
+  const isPlanPageEnabled = useFeatureFlag('planPage');
+
   const navigationItems = useMemo(
     () => [
       { id: 'budget', name: t('Budget'), path: '/budget', Icon: SvgWallet },
+      ...(isPlanPageEnabled
+        ? [{ id: 'plan', name: t('Plan'), path: '/plan', Icon: SvgMoneyBag }]
+        : []),
       {
         id: 'reports-nav',
         name: t('Reports'),
@@ -133,7 +140,7 @@ export function CommandBar() {
         Icon: SvgLibrary,
       },
     ],
-    [t],
+    [t, isPlanPageEnabled],
   );
 
   useEffect(() => {

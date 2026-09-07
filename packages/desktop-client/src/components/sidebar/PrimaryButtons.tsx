@@ -7,6 +7,7 @@ import {
   SvgCheveronRight,
   SvgCog,
   SvgCreditCard,
+  SvgMoneyBag,
   SvgReports,
   SvgStoreFront,
   SvgTag,
@@ -16,6 +17,7 @@ import {
 import { SvgCalendar3 } from '@actual-app/components/icons/v2';
 import { View } from '@actual-app/components/view';
 
+import { useFeatureFlag } from '#hooks/useFeatureFlag';
 import { useIsTestEnv } from '#hooks/useIsTestEnv';
 import { useSyncServerStatus } from '#hooks/useSyncServerStatus';
 
@@ -46,9 +48,14 @@ export function PrimaryButtons() {
     }
   }, [isActive, location.pathname]);
 
+  const isPlanPageEnabled = useFeatureFlag('planPage');
+
   return (
     <View data-testid="sidebar-primary-buttons" style={{ flexShrink: 0 }}>
       <Item title={t('Budget')} Icon={SvgWallet} to="/budget" />
+      {isPlanPageEnabled && (
+        <Item title={t('Plan')} Icon={SvgMoneyBag} to="/plan" />
+      )}
       <Item title={t('Reports')} Icon={SvgReports} to="/reports" />
       <Item title={t('Schedules')} Icon={SvgCalendar3} to="/schedules" />
       <Item

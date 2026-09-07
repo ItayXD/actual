@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 
 import {
   SvgLibrary,
+  SvgMoneyBag,
   SvgReports,
   SvgTag,
   SvgTuning,
@@ -12,6 +13,7 @@ import { SvgCalendar3 } from '@actual-app/components/icons/v2';
 import { spacing } from '@actual-app/components/tokens';
 import { View } from '@actual-app/components/view';
 
+import { useFeatureFlag } from '#hooks/useFeatureFlag';
 import { useIsTestEnv } from '#hooks/useIsTestEnv';
 import { useSyncServerStatus } from '#hooks/useSyncServerStatus';
 
@@ -22,6 +24,7 @@ export function PrimaryNav() {
   const syncServerStatus = useSyncServerStatus();
   const isTestEnv = useIsTestEnv();
   const isUsingServer = syncServerStatus !== 'no-server' || isTestEnv;
+  const isPlanPageEnabled = useFeatureFlag('planPage');
 
   return (
     <View
@@ -32,6 +35,9 @@ export function PrimaryNav() {
       }}
     >
       <NavRow title={t('Budget')} Icon={SvgWallet} to="/budget" />
+      {isPlanPageEnabled && (
+        <NavRow title={t('Plan')} Icon={SvgMoneyBag} to="/plan" />
+      )}
       <NavRow title={t('Reports')} Icon={SvgReports} to="/reports" />
       <NavRow title={t('Schedules')} Icon={SvgCalendar3} to="/schedules" />
       <NavRow title={t('Payees')} Icon={SvgUserGroup} to="/payees" />
