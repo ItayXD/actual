@@ -32,6 +32,7 @@ import { useSyncedPref } from '#hooks/useSyncedPref';
 import { AutoSizingBudgetTable } from './DynamicBudgetTable';
 import * as envelopeBudget from './envelope/EnvelopeBudgetComponents';
 import { EnvelopeBudgetProvider } from './envelope/EnvelopeBudgetContext';
+import { useBudgetTargetInvalidation } from './targets/useBudgetTargetInvalidation';
 import * as trackingBudget from './tracking/TrackingBudgetComponents';
 import { TrackingBudgetProvider } from './tracking/TrackingBudgetContext';
 import { prewarmAllMonths, prewarmMonth } from './util';
@@ -39,6 +40,7 @@ import { prewarmAllMonths, prewarmMonth } from './util';
 export function Budget() {
   const currentMonth = monthUtils.currentMonth();
   const spreadsheet = useSpreadsheet();
+  useBudgetTargetInvalidation();
   const navigate = useNavigate();
   const [summaryCollapsed, setSummaryCollapsedPref] = useLocalPref(
     'budget.summaryCollapsed',

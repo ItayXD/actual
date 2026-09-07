@@ -6,6 +6,7 @@ import type {
   ScheduleEntity,
 } from '@actual-app/core/types/models';
 import type { CleanupTemplate } from '@actual-app/core/types/models/cleanup-templates';
+import { useQueryClient } from '@tanstack/react-query';
 import { debounce } from 'es-toolkit/compat';
 
 import {
@@ -25,6 +26,7 @@ import {
   validatePercentageAllocation,
   validateSchedulePriorities,
 } from '#components/budget/goals/validateAutomation';
+import { budgetTargetQueries } from '#components/budget/targets/queries';
 import { useCleanupGroups } from '#hooks/useCleanupGroups';
 import { pushModal } from '#modals/modalsSlice';
 import { useDispatch } from '#redux';
@@ -69,6 +71,7 @@ export function useBudgetAutomationsEditor({
   onClose,
 }: UseBudgetAutomationsEditorArgs) {
   const dispatch = useDispatch();
+  const queryClient = useQueryClient();
   const { groups: cleanupGroups, createGroup: createCleanupGroup } =
     useCleanupGroups();
 
@@ -171,6 +174,12 @@ export function useBudgetAutomationsEditor({
           },
         ],
         source: 'ui',
+      });
+      // Projected targets are cached indefinitely and keyed only by month, so
+      // changing an automation has to invalidate them explicitly — no budget
+      // cell changed, which is what the passive listener watches for.
+      await queryClient.invalidateQueries({
+        queryKey: budgetTargetQueries.all(),
       });
       onClose();
     } finally {

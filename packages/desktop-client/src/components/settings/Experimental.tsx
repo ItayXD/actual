@@ -176,6 +176,28 @@ export function ExperimentalFeatures() {
                 >
                   <Trans>Subfeature: Budget automations UI</Trans>
                 </FeatureToggle>
+                <FeatureToggle
+                  flag="budgetTargets"
+                  note={
+                    <Trans>
+                      Show target progress and colors from your budget
+                      automations without applying them first.
+                    </Trans>
+                  }
+                >
+                  <Trans>Subfeature: Always-on target progress</Trans>
+                </FeatureToggle>
+                <FeatureToggle
+                  flag="planPage"
+                  note={
+                    <Trans>
+                      Adds a Plan page and dashboard card summarising your
+                      monthly targets against your income.
+                    </Trans>
+                  }
+                >
+                  <Trans>Subfeature: Plan dashboard</Trans>
+                </FeatureToggle>
               </View>
             )}
             <FeatureToggle

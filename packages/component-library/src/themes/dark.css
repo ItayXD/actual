@@ -48,6 +48,11 @@
   --color-budgetNumberPositive: var(--color-budgetNumberNeutral);
   --color-templateNumberFunded: var(--color-numberPositive);
   --color-templateNumberUnderFunded: var(--palette-orange300);
+  --color-budgetProgressTrack: var(--palette-navy500);
+  --color-budgetProgressFilled: var(--color-templateNumberFunded);
+  --color-budgetProgressPartial: var(--color-templateNumberUnderFunded);
+  --color-budgetProgressOverspent: var(--color-budgetNumberNegative);
+  --color-budgetProgressPace: var(--palette-navy150);
   --color-toBudgetPositive: var(--color-numberPositive);
   --color-toBudgetZero: var(--color-numberPositive);
   --color-toBudgetNegative: var(--color-budgetNumberNegative);

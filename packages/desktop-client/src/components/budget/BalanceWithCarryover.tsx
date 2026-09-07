@@ -22,6 +22,9 @@ import { useFormat } from '#hooks/useFormat';
 import { useSheetValue } from '#hooks/useSheetValue';
 import type { Binding } from '#spreadsheet';
 
+import { makeTargetAmountStyle } from './targets/targetStatus';
+import { TargetStatusLabel } from './targets/TargetStatusLabel';
+import type { CategoryTarget } from './targets/useCategoryTarget';
 import { makeBalanceAmountStyle } from './util';
 
 type CarryoverIndicatorProps = {
@@ -92,6 +95,12 @@ type BalanceWithCarryoverProps = Omit<
   budgeted: Binding<'envelope-budget' | 'tracking-budget', 'budget'>;
   longGoal: Binding<'envelope-budget' | 'tracking-budget', 'long-goal'>;
   isDisabled?: boolean;
+  /**
+   * Live target projected from the category's automations. When present it
+   * drives the colour and the status text; when absent the legacy
+   * persisted-goal path runs unchanged.
+   */
+  target?: CategoryTarget | null;
   shouldInlineGoalStatus?: boolean;
   CarryoverIndicator?: ComponentType<CarryoverIndicatorProps>;
   tooltipDisabled?: boolean;
@@ -104,6 +113,7 @@ export function BalanceWithCarryover({
   budgeted,
   longGoal,
   isDisabled,
+  target,
   shouldInlineGoalStatus,
   CarryoverIndicator: CarryoverIndicatorComponent = CarryoverIndicator,
   tooltipDisabled,
@@ -119,12 +129,13 @@ export function BalanceWithCarryover({
   const isGoalTemplatesEnabled = useFeatureFlag('goalTemplatesEnabled');
   const getBalanceAmountStyle = useCallback(
     (balanceValue: number) =>
+      (target ? makeTargetAmountStyle(target.status) : null) ??
       makeBalanceAmountStyle(
         balanceValue,
         isGoalTemplatesEnabled ? goalValue : null,
         longGoalValue === 1 ? balanceValue : budgetedValue,
       ),
-    [budgetedValue, goalValue, isGoalTemplatesEnabled, longGoalValue],
+    [budgetedValue, goalValue, isGoalTemplatesEnabled, longGoalValue, target],
   );
   const format = useFormat();
 
@@ -150,12 +161,19 @@ export function BalanceWithCarryover({
       }),
     [getBalanceAmountStyle, isDisabled],
   );
+  // A projected target supersedes the persisted `goal` column, which is only a
+  // snapshot from the last time a template was applied.
+  const isLongGoal = target ? target.isLongGoal : longGoalValue === 1;
+  const targetAmount = target ? target.target : goalValue;
+
   const GoalStatusDisplay = useCallback(
     (balanceValue, type) => {
       return (
         <>
           <span style={{ fontWeight: 'bold' }}>
-            {getDifferenceToGoal(balanceValue) === 0 ? (
+            {target ? (
+              <TargetStatusLabel target={target} />
+            ) : getDifferenceToGoal(balanceValue) === 0 ? (
               <span style={{ color: theme.templateNumberFunded }}>
                 <Trans>Fully funded</Trans>
               </span>
@@ -193,7 +211,7 @@ export function BalanceWithCarryover({
               <div>
                 {
                   {
-                    type: longGoalValue === 1 ? t('Goal') : t('Automation'),
+                    type: isLongGoal ? t('Goal') : t('Automation'),
                   } as TransObjectLiteral
                 }
               </div>
@@ -205,14 +223,14 @@ export function BalanceWithCarryover({
               <div>
                 {
                   {
-                    amount: format(goalValue, 'financial'),
+                    amount: format(targetAmount, 'financial'),
                   } as TransObjectLiteral
                 }
               </div>
             </Trans>
           </GoalTooltipRow>
           <GoalTooltipRow>
-            {longGoalValue !== 1 ? (
+            {!isLongGoal ? (
               <Trans>
                 <div>Budgeted:</div>
                 <div>
@@ -239,7 +257,15 @@ export function BalanceWithCarryover({
         </>
       );
     },
-    [budgetedValue, format, getDifferenceToGoal, goalValue, longGoalValue, t],
+    [
+      budgetedValue,
+      format,
+      getDifferenceToGoal,
+      isLongGoal,
+      t,
+      target,
+      targetAmount,
+    ],
   );
 
   return (
@@ -258,7 +284,7 @@ export function BalanceWithCarryover({
               delay: 750,
               isDisabled:
                 !isGoalTemplatesEnabled ||
-                goalValue == null ||
+                (goalValue == null && !target) ||
                 isNarrowWidth ||
                 tooltipDisabled,
             }}
@@ -287,7 +313,7 @@ export function BalanceWithCarryover({
           )}
           {shouldInlineGoalStatus &&
             isGoalTemplatesEnabled &&
-            goalValue !== null && (
+            (goalValue !== null || target) && (
               <>
                 <View
                   style={{

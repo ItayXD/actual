@@ -17,6 +17,8 @@ import * as monthUtils from '@actual-app/core/shared/months';
 import { css } from '@emotion/css';
 
 import { BalanceWithCarryover } from '#components/budget/BalanceWithCarryover';
+import { TargetProgressBar } from '#components/budget/targets/TargetProgressBar';
+import { useCategoryTarget } from '#components/budget/targets/useCategoryTarget';
 import { makeAmountGrey } from '#components/budget/util';
 import { NotesButton } from '#components/NotesButton';
 import { CellValue, CellValueText } from '#components/spreadsheet/CellValue';
@@ -202,6 +204,7 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
 }: CategoryMonthProps) {
   const { t } = useTranslation();
   const format = useFormat();
+  const target = useCategoryTarget(category, month);
 
   const budgetMenuTriggerRef = useRef(null);
   const balanceMenuTriggerRef = useRef(null);
@@ -493,6 +496,10 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
         ref={balanceMenuTriggerRef}
         name="balance"
         width="flex"
+        // Truncation is already handled on the number itself; disabling the
+        // Field's wrapper lets the progress bar sit below it in the column
+        // rather than inside the number's 16px-tall, clipped row.
+        truncate={false}
         style={{ paddingRight: styles.monthRightPadding, textAlign: 'right' }}
       >
         <Button
@@ -523,9 +530,24 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
             goal={envelopeBudget.catGoal(category.id)}
             budgeted={envelopeBudget.catBudgeted(category.id)}
             longGoal={envelopeBudget.catLongGoal(category.id)}
+            target={target}
             tooltipDisabled={balanceMenuOpen}
           />
         </Button>
+
+        {target && target.progress !== null && (
+          <TargetProgressBar
+            progress={target.progress}
+            pace={target.pace}
+            status={target.status}
+            aria-label={t('Target progress')}
+            valueText={t('{{funded}} of {{target}}', {
+              funded: format(target.funded, 'financial'),
+              target: format(target.target ?? 0, 'financial'),
+            })}
+            style={{ marginTop: 2 }}
+          />
+        )}
 
         <Popover
           triggerRef={balanceMenuTriggerRef}
