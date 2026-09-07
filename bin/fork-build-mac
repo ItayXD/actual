@@ -1,0 +1,73 @@
+#!/bin/bash -e
+
+# Build the macOS desktop app from this fork, for local use.
+#
+# A trimmed version of `bin/package-electron` that drops what a personal
+# Apple Silicon build does not need:
+#
+#   * only the arm64 DMG — `beforePackHook` runs @electron/rebuild once per
+#     arch, so dropping x64 roughly halves the native-module work
+#   * no `build:browser` and no sync-server build; those exist only to feed the
+#     optional embedded sync server (`startSyncServer` in
+#     packages/desktop-electron/index.ts), which is off unless you enable it,
+#     and is irrelevant when you sync to a hosted server
+#   * no translations pull (run `yarn build:desktop` once if you want
+#     non-English locales; the UI falls back to English without them)
+#
+# The app is left unsigned. `afterSignHook.ts` ad-hoc signs it when CSC_LINK is
+# unset, which is what makes it launchable on Apple Silicon. Nothing here is
+# notarized, so a DMG *downloaded* from a browser needs its quarantine
+# attribute cleared; one built locally does not.
+#
+# Usage: bin/fork-build-mac [--universal]
+
+cd "$(dirname "$0")/.."
+
+TARGETS="dmg:arm64"
+if [ "$1" = "--universal" ]; then
+  TARGETS="dmg:arm64 dmg:x64"
+fi
+
+# The vite desktop build needs more than the default heap.
+export NODE_OPTIONS="--max-old-space-size=4096"
+
+# Stamp a fork-specific prerelease version so the running build is
+# identifiable in Settings, without committing a change to
+# packages/desktop-electron/package.json (upstream bumps that file every
+# release, so a committed version is a guaranteed merge conflict).
+BASE_VERSION=$(node -p "require('./packages/desktop-electron/package.json').version")
+FORK_VERSION="${BASE_VERSION}-fork.$(date -u +%Y%m%d%H%M)"
+# Absolute path: the trap fires after this script has cd'd into
+# packages/desktop-electron, where a relative path would silently miss.
+ELECTRON_PACKAGE_JSON="$PWD/packages/desktop-electron/package.json"
+restore_version() {
+  git checkout -- "$ELECTRON_PACKAGE_JSON" 2>/dev/null || true
+}
+trap restore_version EXIT
+
+npm version "$FORK_VERSION" \
+  --no-git-tag-version \
+  --workspace=desktop-electron \
+  --no-workspaces-update
+
+echo "Building Actual $FORK_VERSION for macOS ($TARGETS)"
+
+yarn workspace @actual-app/crdt build
+yarn workspace plugins-service build
+yarn workspace @actual-app/core build:node
+yarn workspace @actual-app/web build --mode=desktop
+# Emit @actual-app/core declarations; desktop-electron's typings/window.ts needs them.
+yarn workspace @actual-app/core exec tsgo -p tsconfig.json
+yarn workspace desktop-electron update-client
+
+cd packages/desktop-electron
+yarn clean
+yarn build:dist
+yarn electron-builder --mac $TARGETS
+
+echo
+echo "Artifacts in packages/desktop-electron/dist:"
+ls -1 dist/*.dmg 2>/dev/null || true
+echo
+echo "Install with:"
+echo "  rm -rf /Applications/Actual.app && cp -R packages/desktop-electron/dist/mac-arm64/Actual.app /Applications/"

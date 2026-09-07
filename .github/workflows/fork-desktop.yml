@@ -1,0 +1,118 @@
+# Builds this fork's macOS and Windows desktop apps on GitHub-hosted runners.
+#
+# Why this exists rather than reusing electron-pr.yml / electron-master.yml:
+#
+#   * every upstream desktop job runs on Depot runners (`depot-macos-latest`,
+#     `depot-windows-2022-8`, …). Those labels only resolve for repos connected
+#     to upstream's Depot org, so in a fork the jobs queue forever.
+#   * the tag trigger is deliberately `fork-v*`, not `v*`. A `v*` tag in a fork
+#     also fires electron-master.yml, docker-release.yml, netlify-release.yml
+#     and — worst — publish-npm-packages.yml, whose guard
+#     (`if: github.event_name == 'push' || …fork == false`) still lets it run on
+#     a tag push in a fork and attempt an npm publish.
+#
+# Builds are unsigned. afterSignHook.ts ad-hoc signs the .app when CSC_LINK is
+# unset, which keeps it launchable on Apple Silicon; nothing is notarized, so a
+# downloaded DMG needs `xattr -d com.apple.quarantine` (see FORK.md).
+#
+# On a private fork, macOS runner minutes bill at a 10x multiplier — building
+# the Mac app locally with bin/fork-build-mac and using CI only for Windows is
+# usually the cheaper split.
+name: Fork Desktop Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      make_release:
+        description: 'Also publish a GitHub release with the artifacts'
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'fork-v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            targets: --mac dmg:arm64 dmg:x64
+          - os: windows-2022
+            targets: --win nsis:x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      # node-gyp needs setuptools to rebuild better-sqlite3 / bcrypt / argon2.
+      - if: ${{ startsWith(matrix.os, 'windows') }}
+        run: pip.exe install setuptools
+      - if: ${{ ! startsWith(matrix.os, 'windows') }}
+        run: |
+          mkdir .venv
+          python3 -m venv .venv
+          source .venv/bin/activate
+          python3 -m pip install setuptools
+
+      # Works unchanged from a fork: it installs node 24, runs
+      # `yarn --immutable`, and checks out the public actualbudget/translations
+      # repo, which the fork's default GITHUB_TOKEN can read.
+      - name: Set up environment
+        uses: ./.github/actions/setup
+
+      - name: Stamp fork version
+        shell: bash
+        run: |
+          BASE=$(node -p "require('./packages/desktop-electron/package.json').version")
+          npm version "${BASE}-fork.$(date -u +%Y%m%d%H%M)" \
+            --no-git-tag-version \
+            --workspace=desktop-electron \
+            --no-workspaces-update
+
+      # --skip-exe-build stops after `yarn build:dist`, which has to run first
+      # because beforePack/afterSign point at compiled hook JS. Targets are then
+      # selected on the CLI, so the shared electron-builder config in
+      # packages/desktop-electron/package.json is never edited — that keeps the
+      # appx target (tied to upstream's Microsoft Store identity) and the Linux
+      # targets out of the build without creating a merge conflict.
+      - name: Build shared bundles
+        run: ./bin/package-electron --skip-translations --skip-exe-build
+
+      - name: Package installer
+        working-directory: packages/desktop-electron
+        run: yarn electron-builder ${{ matrix.targets }}
+
+      - name: Upload installers
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: actual-fork-${{ matrix.os }}
+          if-no-files-found: error
+          path: |
+            packages/desktop-electron/dist/*.dmg
+            packages/desktop-electron/dist/*.exe
+
+      - name: Publish release
+        if: ${{ startsWith(github.ref, 'refs/tags/fork-v') || inputs.make_release }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/fork-v') && github.ref_name || format('fork-v0.0.0-{0}', github.run_number) }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" \
+              --title "Actual (fork) $TAG" \
+              --notes "Unsigned personal build. On macOS: xattr -d com.apple.quarantine the DMG before opening. On Windows: More info -> Run anyway." \
+              --prerelease
+          gh release upload "$TAG" --clobber \
+            packages/desktop-electron/dist/*.dmg \
+            packages/desktop-electron/dist/*.exe || true
