@@ -29,6 +29,25 @@ import {
 } from './actions';
 import { runSchedule } from './schedule-template';
 import { getActiveSchedules } from './statements';
+import {
+  effectiveRepeatMonths,
+  effectiveSpendWindow,
+  monthsUntilTarget,
+} from './target-meta';
+
+export type CategoryTargetMeta = {
+  templateTypes: Template['type'][];
+  /** Nearest `by`/`spend` deadline, or null when nothing is dated. */
+  targetMonth: string | null;
+  /** Months until `targetMonth`. 0 means due this month. */
+  monthsRemaining: number | null;
+  /** Full amount the target is aiming at, not this month's slice. */
+  totalTargetAmount: number | null;
+  savedTowardTarget: number;
+  limit: { amount: number; hold: boolean } | null;
+  hasRemainder: boolean;
+  isGoalOnly: boolean;
+};
 
 export class CategoryTemplateContext {
   /*----------------------------------------------------------------------------
@@ -387,6 +406,56 @@ export class CategoryTemplateContext {
     };
   }
 
+  /**
+   * Descriptive metadata about what this category is aiming at, for the target
+   * projection used by the budget UI. Read-only: it never runs a template and
+   * never writes anything.
+   */
+  getTargetMeta(): CategoryTargetMeta {
+    const dated = this.templates.filter(
+      (t): t is ByTemplate | SpendTemplate =>
+        t.type === 'by' || t.type === 'spend',
+    );
+
+    // The nearest deadline is what paces the category; a `by 2027-01` alongside
+    // a `by 2026-11` has to be funded on the November schedule.
+    let targetMonth: string | null = null;
+    let monthsRemaining: number | null = null;
+    for (const template of dated) {
+      const months = monthsUntilTarget(template, this.month);
+      if (monthsRemaining === null || months < monthsRemaining) {
+        monthsRemaining = months;
+        targetMonth = monthUtils.addMonths(this.month, months);
+      }
+    }
+
+    const decimalPlaces = this.currency.decimalPlaces;
+    let totalTargetAmount: number | null = null;
+    if (this.goals.length > 0) {
+      totalTargetAmount = amountToInteger(this.goals[0].amount, decimalPlaces);
+    } else if (dated.length > 0) {
+      totalTargetAmount = dated.reduce(
+        (sum, t) => sum + amountToInteger(t.amount, decimalPlaces),
+        0,
+      );
+    } else if (this.limitCheck) {
+      totalTargetAmount = this.limitAmount;
+    }
+
+    return {
+      templateTypes: this.templates.map(t => t.type),
+      targetMonth,
+      monthsRemaining,
+      totalTargetAmount,
+      savedTowardTarget: this.spendAlreadyBudgeted ?? this.fromLastMonth,
+      limit: this.limitCheck
+        ? { amount: this.limitAmount, hold: this.limitHold }
+        : null,
+      hasRemainder: this.remainder.length > 0,
+      isGoalOnly: this.isGoalOnly(),
+    };
+  }
+
   //-----------------------------------------------------------------------------
   // Implementation
   readonly category: CategoryEntity; //readonly so we can double check the category this is using
@@ -404,6 +473,9 @@ export class CategoryTemplateContext {
   private isLongGoal: boolean | null = null; //defaulting the goals to null so templates can be unset
   private goalAmount: number | null = null;
   private fromLastMonth = 0; // leftover from last month
+  // Set by `runSpend`: how much is already put aside toward a multi-month
+  // target, as walked from the sheets. null when no spend template ran.
+  private spendAlreadyBudgeted: number | null = null;
   private limitMet = false;
   private limitExcess: number = 0;
   private limitAmount = 0;
@@ -757,29 +829,12 @@ export class CategoryTemplateContext {
     template: SpendTemplate,
     templateContext: CategoryTemplateContext,
   ): Promise<number> {
-    let fromMonth = `${template.from}`;
-    let toMonth = `${template.month}`;
-    let alreadyBudgeted = templateContext.fromLastMonth;
-    let firstMonth = true;
-
-    //update months if needed
-    const repeat = template.annual
-      ? (template.repeat || 1) * 12
-      : template.repeat;
-    let m = monthUtils.differenceInCalendarMonths(
-      toMonth,
+    const { fromMonth, monthsRemaining } = effectiveSpendWindow(
+      template,
       templateContext.month,
     );
-    if (repeat && m < 0) {
-      while (m < 0) {
-        toMonth = monthUtils.addMonths(toMonth, repeat);
-        fromMonth = monthUtils.addMonths(fromMonth, repeat);
-        m = monthUtils.differenceInCalendarMonths(
-          toMonth,
-          templateContext.month,
-        );
-      }
-    }
+    let alreadyBudgeted = templateContext.fromLastMonth;
+    let firstMonth = true;
 
     for (
       let m = fromMonth;
@@ -807,18 +862,18 @@ export class CategoryTemplateContext {
       }
     }
 
-    const numMonths = monthUtils.differenceInCalendarMonths(
-      toMonth,
-      templateContext.month,
-    );
+    // Recorded so `getTargetMeta` can report real progress toward a multi-month
+    // target without re-walking the sheets.
+    templateContext.spendAlreadyBudgeted = alreadyBudgeted;
+
     const target = amountToInteger(
       template.amount,
       templateContext.currency.decimalPlaces,
     );
-    if (numMonths < 0) {
+    if (monthsRemaining < 0) {
       return 0;
     } else {
-      return Math.round((target - alreadyBudgeted) / (numMonths + 1));
+      return Math.round((target - alreadyBudgeted) / (monthsRemaining + 1));
     }
   }
 
@@ -918,23 +973,8 @@ export class CategoryTemplateContext {
     //find shortest time period
     for (let i = 0; i < byTemplates.length; i++) {
       const template = byTemplates[i];
-      let targetMonth = `${template.month}`;
-      const period = template.annual
-        ? (template.repeat || 1) * 12
-        : template.repeat != null
-          ? template.repeat
-          : null;
-      let numMonths = monthUtils.differenceInCalendarMonths(
-        targetMonth,
-        templateContext.month,
-      );
-      while (numMonths < 0 && period) {
-        targetMonth = monthUtils.addMonths(targetMonth, period);
-        numMonths = monthUtils.differenceInCalendarMonths(
-          targetMonth,
-          templateContext.month,
-        );
-      }
+      const period = effectiveRepeatMonths(template);
+      const numMonths = monthsUntilTarget(template, templateContext.month);
       savedInfo.push({ numMonths, period });
       if (
         workingShortNumMonths === undefined ||

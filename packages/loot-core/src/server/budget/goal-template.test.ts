@@ -11,6 +11,7 @@ import {
   applyMultipleCategoryTemplates,
   applyTemplate,
   dryRunCategoryTemplate,
+  projectTargets,
 } from './goal-template';
 import * as statements from './statements';
 
@@ -688,5 +689,190 @@ describe('applyTemplate (force=false)', () => {
       .mock.calls.map(call => call[0]);
     expect(budgetCalls.map(c => c.category)).toEqual([cat1.id]);
     expect(budgetCalls[0].amount).toBe(10000);
+  });
+});
+
+describe('projectTargets', () => {
+  const groceries: CategoryEntity = {
+    id: 'cat-1',
+    name: 'Groceries',
+    group: 'g1',
+    is_income: false,
+  };
+  const fun: CategoryEntity = {
+    id: 'cat-2',
+    name: 'Fun',
+    group: 'g1',
+    is_income: false,
+  };
+
+  const fixed100: Template = {
+    type: 'simple',
+    monthly: 100,
+    directive: 'template',
+    priority: 1,
+  };
+  const remainder: Template = {
+    type: 'remainder',
+    weight: 1,
+    directive: 'template',
+    priority: null,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(statements.getActiveSchedules).mockResolvedValue(
+      [] as Awaited<ReturnType<typeof statements.getActiveSchedules>>,
+    );
+    vi.mocked(db.getCategories).mockResolvedValue([]);
+  });
+
+  it('never writes a budget or a goal', async () => {
+    setupSheetMock({ 'to-budget': 100000 });
+    setupAqlForWideScope(
+      [{ category: groceries, templates: [fixed100] }],
+      [groceries],
+    );
+
+    await projectTargets({ months: ['2026-09'] });
+
+    expect(actions.setBudget).not.toHaveBeenCalled();
+    expect(actions.setGoal).not.toHaveBeenCalled();
+  });
+
+  it('projects every category in one pass, sharing the remainder pool', async () => {
+    setupSheetMock({ 'to-budget': 100000 });
+    setupAqlForWideScope(
+      [
+        { category: groceries, templates: [fixed100] },
+        { category: fun, templates: [remainder] },
+      ],
+      [groceries, fun],
+    );
+
+    const [projection] = await projectTargets({ months: ['2026-09'] });
+
+    expect(projection.month).toBe('2026-09');
+    expect(projection.categories).toHaveLength(2);
+
+    const groceriesTarget = projection.categories.find(
+      c => c.categoryId === 'cat-1',
+    );
+    expect(groceriesTarget?.goal).toBe(10000);
+    expect(groceriesTarget?.isElastic).toBe(false);
+
+    // "Whatever is left" has no fixed number to be under- or over-funded
+    // against, so it projects no target at all.
+    const funTarget = projection.categories.find(c => c.categoryId === 'cat-2');
+    expect(funTarget?.isElastic).toBe(true);
+    expect(funTarget?.goal).toBe(null);
+  });
+
+  it('reports a #goal as a long goal with the goal amount as its target', async () => {
+    setupSheetMock({ 'to-budget': 100000 });
+    setupAqlForWideScope(
+      [
+        {
+          category: groceries,
+          templates: [
+            fixed100,
+            { type: 'goal', amount: 5000, directive: 'goal' },
+          ],
+        },
+      ],
+      [groceries],
+    );
+
+    const [projection] = await projectTargets({ months: ['2026-09'] });
+
+    expect(projection.categories[0].longGoal).toBe(true);
+    expect(projection.categories[0].goal).toBe(500000);
+    expect(projection.categories[0].totalTargetAmount).toBe(500000);
+  });
+
+  it('reports the deadline and remaining months for a dated target', async () => {
+    setupSheetMock({ 'to-budget': 100000 });
+    setupAqlForWideScope(
+      [
+        {
+          category: groceries,
+          templates: [
+            {
+              type: 'by',
+              amount: 1200,
+              month: '2026-12',
+              directive: 'template',
+              priority: 1,
+            },
+          ],
+        },
+      ],
+      [groceries],
+    );
+
+    const [projection] = await projectTargets({ months: ['2026-09'] });
+
+    expect(projection.categories[0].targetMonth).toBe('2026-12');
+    expect(projection.categories[0].monthsRemaining).toBe(3);
+    expect(projection.categories[0].totalTargetAmount).toBe(120000);
+  });
+
+  it('omits a category that has no templates, even with a stale goal on the sheet', async () => {
+    setupSheetMock({ 'to-budget': 100000, 'goal-cat-2': 50000 });
+    setupAqlForWideScope(
+      [{ category: groceries, templates: [fixed100] }],
+      [groceries, fun],
+    );
+
+    const [projection] = await projectTargets({ months: ['2026-09'] });
+
+    expect(projection.categories.map(c => c.categoryId)).toEqual(['cat-1']);
+  });
+
+  it('surfaces an error for one category without suppressing the others', async () => {
+    setupSheetMock({ 'to-budget': 100000 });
+    setupAqlForWideScope(
+      [
+        { category: groceries, templates: [fixed100] },
+        {
+          category: fun,
+          templates: [
+            { type: 'goal', amount: 10, directive: 'goal' },
+            { type: 'goal', amount: 20, directive: 'goal' },
+          ],
+        },
+      ],
+      [groceries, fun],
+    );
+
+    const [projection] = await projectTargets({ months: ['2026-09'] });
+
+    const broken = projection.categories.find(c => c.categoryId === 'cat-2');
+    expect(broken?.error).toMatch(/Only one #goal/);
+    expect(broken?.goal).toBe(null);
+
+    // The whole point of continueOnError: the healthy category keeps its target.
+    const healthy = projection.categories.find(c => c.categoryId === 'cat-1');
+    expect(healthy?.error).toBe(null);
+    expect(healthy?.goal).toBe(10000);
+  });
+
+  it('projects several months in one call', async () => {
+    setupSheetMock({ 'to-budget': 100000 });
+    setupAqlForWideScope(
+      [{ category: groceries, templates: [fixed100] }],
+      [groceries],
+    );
+
+    const projections = await projectTargets({
+      months: ['2026-09', '2026-10', '2026-11'],
+    });
+
+    expect(projections.map(p => p.month)).toEqual([
+      '2026-09',
+      '2026-10',
+      '2026-11',
+    ]);
+    expect(projections.every(p => p.categories[0].goal === 10000)).toBe(true);
   });
 });

@@ -6,6 +6,10 @@ import * as monthUtils from '#shared/months';
 import { q } from '#shared/query';
 import type { CategoryEntity, CategoryGroupEntity } from '#types/models';
 import type { CleanupTemplate } from '#types/models/cleanup-templates';
+import type {
+  CategoryTargetProjection,
+  MonthTargetProjection,
+} from '#types/models/targets';
 import type { Template } from '#types/models/templates';
 
 import { getSheetValue, isTrackingBudget, setBudget, setGoal } from './actions';
@@ -211,6 +215,9 @@ async function setGoals(month: string, templateGoal: TemplateGoal[]) {
 type ComputedTemplates = {
   contexts: CategoryTemplateContext[];
   errors: string[];
+  // Same failures as `errors`, keyed by category so a projection can attribute
+  // them. `errors` stays a flat list for the user-facing notification.
+  categoryErrors: Record<CategoryEntity['id'], string>;
   orphanGoals: TemplateGoal[];
 };
 
@@ -220,6 +227,11 @@ async function computeTemplates(
   categoryTemplates: Record<CategoryEntity['id'], Template[]>,
   categories: CategoryEntity[] = [],
   skipAvailableClamp: boolean = false,
+  // When true, a category whose templates fail to construct is skipped instead
+  // of aborting the whole run. Applying budgets must stay all-or-nothing (a
+  // typo should never write a partial budget), but a read-only projection must
+  // not let one broken category blank every other category's target.
+  continueOnError: boolean = false,
 ): Promise<ComputedTemplates> {
   // setup categories
   const isTracking = isTrackingBudget();
@@ -237,6 +249,7 @@ async function computeTemplates(
   );
   const prioritiesSet = new Set<number>();
   const errors: string[] = [];
+  const categoryErrors: Record<CategoryEntity['id'], string> = {};
   const orphanGoals: TemplateGoal[] = [];
   for (const category of categories) {
     const { id } = category;
@@ -264,6 +277,7 @@ async function computeTemplates(
         templateContexts.push(templateContext);
       } catch (e) {
         errors.push(`${category.name}: ${e.message}`);
+        categoryErrors[id] = e.message;
       }
 
       // do a reset of the goals that are orphaned
@@ -276,8 +290,8 @@ async function computeTemplates(
     }
   }
 
-  if (errors.length > 0) {
-    return { contexts: templateContexts, errors, orphanGoals };
+  if (errors.length > 0 && !continueOnError) {
+    return { contexts: templateContexts, errors, categoryErrors, orphanGoals };
   }
 
   const priorities = new Int32Array([...prioritiesSet]).sort((a, b) => a - b);
@@ -296,7 +310,7 @@ async function computeTemplates(
 
   distributeRemainder(templateContexts, availBudget);
 
-  return { contexts: templateContexts, errors, orphanGoals };
+  return { contexts: templateContexts, errors, categoryErrors, orphanGoals };
 }
 
 async function processTemplate(
@@ -353,11 +367,144 @@ async function processTemplate(
   };
 }
 
+/**
+ * True when the templates express "whatever is left" rather than a fixed
+ * amount, so there is no number to be under- or over-funded against.
+ */
+function hasElasticTemplate(templates: Template[]): boolean {
+  return templates.some(
+    t =>
+      t.type === 'remainder' ||
+      (t.type === 'percentage' &&
+        t.category.toLocaleLowerCase() === 'available funds'),
+  );
+}
+
+function projectCategory(
+  context: CategoryTemplateContext,
+  templates: Template[],
+  error: string | null,
+): CategoryTargetProjection {
+  const values = context.getValues();
+  const meta = context.getTargetMeta();
+
+  return {
+    categoryId: context.category.id,
+    budgeted: values.budgeted,
+    goal: values.goal,
+    longGoal: Boolean(values.longGoal),
+    perTemplate: templates.map(t => values.perTemplateContribution.get(t) ?? 0),
+    templateTypes: meta.templateTypes,
+    targetMonth: meta.targetMonth,
+    monthsRemaining: meta.monthsRemaining,
+    totalTargetAmount: meta.totalTargetAmount,
+    savedTowardTarget: meta.savedTowardTarget,
+    limit: meta.limit,
+    isElastic: hasElasticTemplate(templates),
+    error,
+  };
+}
+
+/**
+ * Compute what every category's automations are aiming at, for one or more
+ * months, **without writing anything** — no budgets, no goals, no sync
+ * messages. This is what lets the budget table colour and chart a target the
+ * user has not applied yet.
+ *
+ * All categories go through a single `computeTemplates` call per month, because
+ * `remainder` and `percentage` templates depend on each other across
+ * categories; running them one at a time gives different (wrong) answers.
+ *
+ * The priority clamp is skipped, so the result is what the templates *demand*,
+ * not what applying them would assign when To Budget runs dry. Present it as a
+ * target, never as "will assign".
+ */
+export async function projectTargets({
+  months,
+  categoryIds,
+  templateOverrides,
+}: {
+  months: string[];
+  categoryIds?: CategoryEntity['id'][];
+  templateOverrides?: Record<CategoryEntity['id'], Template[]>;
+}): Promise<MonthTargetProjection[]> {
+  const isTracking = isTrackingBudget();
+  let categories = (await getCategories()).filter(
+    c => isTracking || !c.is_income,
+  );
+  if (categoryIds) {
+    const wanted = new Set(categoryIds);
+    categories = categories.filter(c => wanted.has(c.id));
+  }
+  if (categories.length === 0) {
+    return months.map(month => ({ month, categories: [] }));
+  }
+
+  const stored = await getTemplates(c =>
+    categories.some(cat => cat.id === c.id),
+  );
+  const templatesByCategory: Record<CategoryEntity['id'], Template[]> = {
+    ...stored,
+    ...templateOverrides,
+  };
+
+  const projections: MonthTargetProjection[] = [];
+  for (const month of months) {
+    const { contexts, categoryErrors } = await computeTemplates(
+      month,
+      /* force */ true,
+      templatesByCategory,
+      categories,
+      /* skipAvailableClamp */ true,
+      /* continueOnError */ true,
+    );
+
+    const projected = contexts.map(context =>
+      projectCategory(
+        context,
+        templatesByCategory[context.category.id] ?? [],
+        categoryErrors[context.category.id] ?? null,
+      ),
+    );
+
+    // A category whose templates threw has no context at all, so surface the
+    // error on its own rather than dropping the category silently.
+    for (const [categoryId, error] of Object.entries(categoryErrors)) {
+      if (!projected.some(p => p.categoryId === categoryId)) {
+        projected.push({
+          categoryId,
+          budgeted: 0,
+          goal: null,
+          longGoal: false,
+          perTemplate: [],
+          templateTypes: [],
+          targetMonth: null,
+          monthsRemaining: null,
+          totalTargetAmount: null,
+          savedTowardTarget: 0,
+          limit: null,
+          isElastic: false,
+          error,
+        });
+      }
+    }
+
+    projections.push({ month, categories: projected });
+  }
+
+  return projections;
+}
+
 export type DryRunCategoryResult = {
   budgeted: number;
   perTemplate: number[];
 };
 
+/**
+ * Projection for a single category's *unsaved* templates, used by the budget
+ * automations editor to preview an edit. Same engine as `projectTargets`, which
+ * answers the different question of "what do the saved templates want".
+ */
 export async function dryRunCategoryTemplate({
   month,
   categoryId,
@@ -367,27 +514,19 @@ export async function dryRunCategoryTemplate({
   categoryId: CategoryEntity['id'];
   templates: Template[];
 }): Promise<DryRunCategoryResult> {
-  // The projection answers "how much do these templates demand" — it
-  // skips the priority clamp so future months (where To Budget is empty)
-  // still show the templates' intended amount instead of 0.
-  const { data: categoryData }: { data: CategoryEntity[] } = await aqlQuery(
-    q('categories').filter({ id: categoryId }).select('*'),
+  const [projection] = await projectTargets({
+    months: [month],
+    categoryIds: [categoryId],
+    templateOverrides: { [categoryId]: templates },
+  });
+  const projected = projection?.categories.find(
+    c => c.categoryId === categoryId,
   );
-  if (categoryData.length === 0) {
+  if (!projected || projected.error) {
     return { budgeted: 0, perTemplate: templates.map(() => 0) };
   }
-  const { contexts } = await computeTemplates(
-    month,
-    true,
-    { [categoryId]: templates },
-    categoryData,
-    true,
-  );
-  const ctx = contexts.find(c => c.category.id === categoryId);
-  if (!ctx) return { budgeted: 0, perTemplate: templates.map(() => 0) };
-  const values = ctx.getValues();
   return {
-    budgeted: values.budgeted,
-    perTemplate: templates.map(t => values.perTemplateContribution.get(t) ?? 0),
+    budgeted: projected.budgeted,
+    perTemplate: projected.perTemplate,
   };
 }
