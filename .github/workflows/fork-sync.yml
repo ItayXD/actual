@@ -117,7 +117,14 @@ jobs:
           echo "fork=$fork_version" >>"$GITHUB_OUTPUT"
           echo "incoming=$incoming" >>"$GITHUB_OUTPUT"
 
-          if [ "$upstream_version" != "$fork_version" ]; then
+          # `incoming == 0` wins over everything, force included: fork/main already
+          # contains upstream/master, so there is nothing to merge and a PR would
+          # have no commits in it. GitHub rejects that outright ("No commits
+          # between ..."), which is how this case was found.
+          if [ "$incoming" -eq 0 ]; then
+            echo "fork/main already contains upstream/master ($upstream_version) — nothing to merge."
+            echo "sync=false" >>"$GITHUB_OUTPUT"
+          elif [ "$upstream_version" != "$fork_version" ]; then
             echo "New release: $fork_version -> $upstream_version ($incoming commits)"
             echo "sync=true" >>"$GITHUB_OUTPUT"
           elif [ "${{ inputs.force }}" = 'true' ]; then
