@@ -217,8 +217,8 @@ export function ExperimentalFeatures() {
               note={
                 <Trans>
                   Adds a usage bar to the Balance column showing how much of a
-                  category is spent, and how long it is forecast to last at
-                  your usual spending rhythm.
+                  category is spent, and how long it is forecast to last at your
+                  usual spending rhythm.
                 </Trans>
               }
             >

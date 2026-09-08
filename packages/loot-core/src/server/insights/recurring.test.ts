@@ -127,7 +127,7 @@ describe('buildPayeeSeries', () => {
     const series = buildPayeeSeries(txns, NAMES);
 
     expect(series).toHaveLength(2);
-    expect(series.map(s => s.sign).sort()).toEqual([-1, 1]);
+    expect(series.map(s => s.sign).sort((a, b) => a - b)).toEqual([-1, 1]);
     // Both are clean monthly streams once separated; mixed together the gaps
     // would have collapsed to zero and matched no cadence.
     expect(series.every(s => s.cadence === 'monthly')).toBe(true);
