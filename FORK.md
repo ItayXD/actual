@@ -87,9 +87,11 @@ workflow files and they arrive enabled (see _CI_ below). The allowlist is by **f
 name** — `fork-desktop.yml` and `fork-sync.yml` — and must not be a `fork-*` glob:
 `fork-pr-welcome.yml` is upstream's file despite its name.
 
-### Two one-time GitHub settings
+### The one-time GitHub settings
 
-Neither is code, and the workflow cannot do either for itself:
+None of these is code, and the workflow cannot do any of them for itself. All three are
+already applied — this records what they are and why, since none is discoverable from the
+repo.
 
 1. **The default branch must be `fork/main`.** GitHub runs `schedule` and
    `workflow_dispatch` only from the default branch, and `master` here is a pristine
@@ -101,6 +103,26 @@ Neither is code, and the workflow cannot do either for itself:
    after 60 days with no repository activity, and emails the owner. A landed sync is a
    commit, so monthly releases keep the timer reset by themselves — but a sync left
    conflicted and unmerged for two months will stop the schedule until you re-enable it.
+3. **Allow Actions to create pull requests.** Settings → Actions → General → Workflow
+   permissions → _Allow GitHub Actions to create and approve pull requests_
+   (`can_approve_pull_request_reviews`). Without it `gh pr create` fails with
+   `Resource not accessible by integration`. `default_workflow_permissions` is
+   deliberately left at **read** — the workflow declares the writes it needs in its own
+   `permissions:` block, which is enough (its pushes worked while the repo default was
+   read).
+
+Watch out for two traps that cost a run each when this was first switched on:
+
+- **`gh` defaults to the parent repo in a fork.** An unqualified `gh pr create` or
+  `gh workflow disable` inside the fork targets `actualbudget/actual`. The workflow sets
+  `GH_REPO: ${{ github.repository }}` once in its job env to prevent that; do not remove
+  it, and pass `-R ItayXD/actual` when running `gh` against the fork by hand.
+- **Switching the default branch to `fork/main` registered all 41 workflow files, every
+  one enabled** — GitHub had only known about the 2 present on `master`. That briefly put
+  `publish-npm-packages`, `docker-release`, `netlify-release`, `electron-master`,
+  `publish-flathub`, `publish-microsoft-store`, `publish-crdt` and
+  `publish-nightly-electron` in play. Re-check with
+  `gh workflow list --all -R ItayXD/actual` after any change to the default branch.
 
 ## Sync compatibility — hard rules
 
