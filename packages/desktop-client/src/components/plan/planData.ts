@@ -105,6 +105,7 @@ export function buildPlanData(
 
       const projection = byCategory.get(category.id);
       const target = projection?.goal ?? null;
+      const isLongGoal = projection?.longGoal ?? false;
       const pastSpending = past.byCategory[category.id] ?? 0;
       const pastBudgeted = past.budgetedByCategory[category.id] ?? 0;
       const planCategory: PlanCategory = {
@@ -112,10 +113,13 @@ export function buildPlanData(
         target,
         assigned: values.budgeted[category.id] ?? 0,
         balance: values.balance[category.id] ?? 0,
+        isLongGoal,
         pastSpending,
         pastBudgeted,
-        vsPastSpending: target === null ? null : target - pastSpending,
-        isLongGoal: projection?.longGoal ?? false,
+        // A long-term goal's target is a lifetime total, so comparing it to a
+        // month of history would be meaningless.
+        vsPastSpending:
+          target === null || isLongGoal ? null : target - pastSpending,
         isElastic: projection?.isElastic ?? false,
         targetMonth: projection?.targetMonth ?? null,
         monthsRemaining: projection?.monthsRemaining ?? null,
@@ -170,10 +174,21 @@ export function buildPlanData(
 }
 
 /**
- * Elastic categories ("whatever is left") have no fixed number, so including
- * them would make the monthly total depend on how much happened to be
- * available rather than on the plan.
+ * Sums only the figures that are actually a monthly ask.
+ *
+ * Two kinds are left out:
+ *
+ * - **Long-term goals.** When a `#goal` drives a category the engine reports
+ *   the *lifetime* target, not this month's contribution, so adding a 10,000
+ *   emergency fund to a monthly plan would overstate it by 10,000. These are
+ *   tracked in their own section, against what has been saved so far.
+ * - **Elastic targets** ("whatever is left"), which have no fixed number at
+ *   all; including them would make the total depend on how much happened to be
+ *   available rather than on the plan.
  */
 function sumTargets(categories: PlanCategory[]): number {
-  return categories.reduce((sum, c) => sum + (c.target ?? 0), 0);
+  return categories.reduce(
+    (sum, c) => (c.isLongGoal ? sum : sum + (c.target ?? 0)),
+    0,
+  );
 }

@@ -158,6 +158,59 @@ describe('buildPlanData', () => {
     expect(data.groups[0].categories[0].pastSpending).toBe(4000);
   });
 
+  it('excludes long-term goals from the planned total', () => {
+    // A #goal reports a lifetime target, not a monthly contribution, so
+    // summing it into a monthly plan would wildly overstate it.
+    const data = buildPlanData(
+      [
+        projection('a', { goal: 50000 }),
+        projection('emergency', { goal: 1000000, longGoal: true }),
+      ],
+      values(),
+      past({ income: 400000 }),
+      [group('g1', [cat('a'), cat('emergency')])],
+    );
+
+    expect(data.totalTarget).toBe(50000);
+    expect(data.groups[0].target).toBe(50000);
+    // Still listed, and still tracked as a long-term goal.
+    expect(data.groups[0].categories.map(c => c.category.id)).toEqual([
+      'a',
+      'emergency',
+    ]);
+    expect(data.longTerm.map(c => c.category.id)).toEqual(['emergency']);
+  });
+
+  it('keeps dated targets in the planned total', () => {
+    // `by`/`spend` report this month's slice, which is a monthly ask.
+    const data = buildPlanData(
+      [
+        projection('a', { goal: 50000 }),
+        projection('tax', {
+          goal: 10696,
+          monthsRemaining: 7,
+          totalTargetAmount: 108900,
+        }),
+      ],
+      values(),
+      past(),
+      [group('g1', [cat('a'), cat('tax')])],
+    );
+
+    expect(data.totalTarget).toBe(60696);
+  });
+
+  it('does not compare a lifetime goal against a month of history', () => {
+    const data = buildPlanData(
+      [projection('emergency', { goal: 1000000, longGoal: true })],
+      values(),
+      past({ byCategory: { emergency: 3333 } }),
+      [group('g1', [cat('emergency')])],
+    );
+
+    expect(data.groups[0].categories[0].vsPastSpending).toBe(null);
+  });
+
   it('excludes elastic categories from the planned total', () => {
     const data = buildPlanData(
       [

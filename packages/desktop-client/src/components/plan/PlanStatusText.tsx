@@ -33,6 +33,17 @@ export function PlanStatusText({
     );
   }
 
+  // A long-term goal's figure is a lifetime target, not a monthly ask, so it is
+  // deliberately absent from Total planned. Say so, or the row looks like an
+  // arithmetic error.
+  if (item.isLongGoal) {
+    return (
+      <span style={{ color: theme.pageTextSubdued }}>
+        <Trans>Long-term goal</Trans>
+      </span>
+    );
+  }
+
   const funded = item.isLongGoal ? item.balance : item.assigned;
   const shortfall = (item.target ?? 0) - funded;
 
