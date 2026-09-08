@@ -167,7 +167,10 @@ export function PlanGroupList({
   onEditAutomations: (categoryId: CategoryEntity['id']) => void;
 }) {
   return (
-    <View>
+    // A flex child of the page's scroller, so it must keep its full height —
+    // otherwise its (incompressible) rows overflow it and whatever follows is
+    // laid out on top of them.
+    <View style={{ flexShrink: 0 }}>
       <ColumnHeaders />
       {groups.map(group => (
         <View key={group.group.id} style={{ flexShrink: 0 }}>
