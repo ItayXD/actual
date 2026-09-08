@@ -1,4 +1,6 @@
 #!/bin/bash -e
+# pipefail so a failing build step is never masked by a later pipe stage.
+set -o pipefail
 
 # Build the macOS desktop app from this fork, for local use.
 #
@@ -65,7 +67,23 @@ yarn clean
 yarn build:dist
 yarn electron-builder --mac $TARGETS
 
+# Self-verify rather than trusting an exit code: two earlier builds "succeeded"
+# while leaving a stale DMG in place, because the failure was swallowed by a
+# pipeline. Assert the packaged app really carries the version just stamped.
+BUILT_PLIST="dist/mac-arm64/Actual.app/Contents/Info.plist"
+if [ ! -f "$BUILT_PLIST" ]; then
+  echo "BUILD FAILED: $BUILT_PLIST is missing - no app was packaged" >&2
+  exit 1
+fi
+BUILT_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$BUILT_PLIST")
+if [ "$BUILT_VERSION" != "$FORK_VERSION" ]; then
+  echo "BUILD FAILED: packaged app is $BUILT_VERSION but this run stamped $FORK_VERSION" >&2
+  echo "  (a stale build is probably still sitting in dist/)" >&2
+  exit 1
+fi
+
 echo
+echo "Verified: packaged app reports $BUILT_VERSION"
 echo "Artifacts in packages/desktop-electron/dist:"
 ls -1 dist/*.dmg 2>/dev/null || true
 echo
