@@ -63,6 +63,15 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # CRITICAL: in a fork, `gh` defaults to the PARENT repository, so an
+  # unqualified `gh pr create` / `gh workflow disable` here targets
+  # actualbudget/actual, not this fork. That is not hypothetical — it is what
+  # broke the first real run: the PR was attempted against upstream, and the
+  # re-disable step read upstream's workflow states (all active there) and tried
+  # to disable upstream's workflows. gh honours GH_REPO for every subcommand,
+  # so setting it once fixes all of them. Do not remove it.
+  GH_REPO: ${{ github.repository }}
+
   # The fork's own workflows, by FILE NAME. Must not be a `fork-*` glob:
   # fork-pr-welcome.yml is upstream's file despite its name, and has to stay
   # disabled like the rest.
@@ -402,19 +411,27 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh workflow list --all --limit 200 --json id,name,path,state \
-            --jq '.[] | select(.state == "active") | [.id, .path, .name] | @tsv' |
+          # Deliberately does NOT filter on `state`: that filter came back wrong in
+          # CI (it offered up workflows already disabled), and a wrong filter here
+          # means upstream's publish/release workflows quietly stay enabled. So
+          # attempt every non-allowlisted workflow and treat GitHub's
+          # "not active" refusal as the success it is. Idempotent either way.
+          gh workflow list --all --limit 200 --json id,name,path \
+            --jq '.[] | [.id, .path, .name] | @tsv' |
             while IFS=$'\t' read -r id path name; do
               file=${path##*/}
               case " $FORK_WORKFLOWS " in
                 *" $file "*)
-                  echo "keeping   $file ($name)"
+                  echo "keeping     $file ($name)"
                   continue
                   ;;
               esac
-              if gh workflow disable "$id"; then
-                echo "disabled  $file ($name)"
+              if out=$(gh workflow disable "$id" 2>&1 </dev/null); then
+                echo "disabled    $file ($name)"
               else
-                echo "::warning::could not disable $file"
+                case "$out" in
+                  *'not active'*) echo "already off $file" ;;
+                  *) echo "::warning::could not disable $file: $out" ;;
+                esac
               fi
             done
