@@ -85,20 +85,32 @@ export function PlanPage() {
 
   return (
     <Page header={t('Plan')}>
-      <View style={{ maxWidth: 1000, width: '100%' }}>
-        <MonthSelector month={month} onChange={setMonth} />
+      {/*
+        `minHeight: 0` plus an explicit scroller matter here. Every View sets
+        `minHeight: 0`, so flex children may shrink below their own content —
+        and the wide Page does not scroll `main` itself. Without this, a budget
+        with more categories than fit on screen squeezes every row until the
+        text overlaps instead of scrolling.
+      */}
+      <View style={{ maxWidth: 1000, width: '100%', flex: 1, minHeight: 0 }}>
+        <View style={{ flexShrink: 0 }}>
+          <MonthSelector month={month} onChange={setMonth} />
+        </View>
 
         {data ? (
           <>
-            <PlanSummary
-              data={data}
-              basis={comparisonBasis}
-              onBasisChange={setBasis}
-            />
+            <View style={{ flexShrink: 0 }}>
+              <PlanSummary
+                data={data}
+                basis={comparisonBasis}
+                onBasisChange={setBasis}
+              />
+            </View>
 
             {data.errors.length > 0 && (
               <View
                 style={{
+                  flexShrink: 0,
                   marginTop: 12,
                   padding: 10,
                   backgroundColor: theme.errorBackground,
@@ -115,11 +127,20 @@ export function PlanPage() {
               </View>
             )}
 
-            <PlanGroupList
-              groups={data.groups}
-              onEditAutomations={onEditAutomations}
-            />
-            <PlanLongTermGoals goals={data.longTerm} />
+            <View
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflowY: 'auto',
+                paddingBottom: 16,
+              }}
+            >
+              <PlanGroupList
+                groups={data.groups}
+                onEditAutomations={onEditAutomations}
+              />
+              <PlanLongTermGoals goals={data.longTerm} />
+            </View>
           </>
         ) : (
           <View style={{ padding: '24px 0' }}>

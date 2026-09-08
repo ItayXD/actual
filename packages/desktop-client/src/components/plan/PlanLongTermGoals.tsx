@@ -43,6 +43,7 @@ function GoalRow({ item }: { item: PlanCategory }) {
   return (
     <View
       style={{
+        flexShrink: 0,
         gap: 5,
         padding: '10px 0',
         borderBottomWidth: 1,
@@ -101,7 +102,7 @@ export function PlanLongTermGoals({ goals }: { goals: PlanCategory[] }) {
   }
 
   return (
-    <View style={{ marginTop: 28 }}>
+    <View style={{ flexShrink: 0, marginTop: 28 }}>
       <Text style={{ fontWeight: 600, marginBottom: 4 }}>
         <Trans>Long-term goals</Trans>
       </Text>

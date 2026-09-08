@@ -38,7 +38,7 @@ function SummaryFigure({
   const format = useFormat();
 
   return (
-    <View style={{ flex: 1, minWidth: 150, gap: 4 }}>
+    <View style={{ flex: 1, flexShrink: 0, minWidth: 150, gap: 4 }}>
       <Text style={{ ...styles.smallText, color: theme.pageTextSubdued }}>
         {label}
       </Text>
@@ -76,7 +76,7 @@ export function PlanSummary({
   const overcommitted = data.unplanned < 0;
 
   return (
-    <View style={{ gap: 12, padding: '12px 0' }}>
+    <View style={{ flexShrink: 0, gap: 12, padding: '12px 0' }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Text style={{ ...styles.smallText, color: theme.pageTextSubdued }}>
           <Trans>Compared with</Trans>

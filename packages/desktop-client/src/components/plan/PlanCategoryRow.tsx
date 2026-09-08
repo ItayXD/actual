@@ -87,6 +87,8 @@ export function PlanCategoryRow({
   return (
     <View
       style={{
+        // Never compress: a squeezed row overlaps its neighbours' text.
+        flexShrink: 0,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,

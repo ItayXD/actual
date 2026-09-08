@@ -29,6 +29,7 @@ function ColumnHeaders() {
   return (
     <View
       style={{
+        flexShrink: 0,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
@@ -62,6 +63,7 @@ function GroupHeader({ item }: { item: PlanGroup }) {
   return (
     <View
       style={{
+        flexShrink: 0,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
@@ -133,7 +135,7 @@ function AddCategoryRow({ groupId }: { groupId: string }) {
   }
 
   return (
-    <View style={{ padding: '4px 0', maxWidth: 260 }}>
+    <View style={{ flexShrink: 0, padding: '4px 0', maxWidth: 260 }}>
       <Input
         autoFocus
         placeholder={t('Category name')}
@@ -168,7 +170,7 @@ export function PlanGroupList({
     <View>
       <ColumnHeaders />
       {groups.map(group => (
-        <View key={group.group.id}>
+        <View key={group.group.id} style={{ flexShrink: 0 }}>
           <GroupHeader item={group} />
           {group.categories.map(item => (
             <PlanCategoryRow
