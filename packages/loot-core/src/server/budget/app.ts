@@ -20,6 +20,7 @@ import { storeNoteCleanups } from './cleanup-template-notes';
 import * as goalActions from './goal-template';
 import { getPastSpending } from './past-spending';
 import { sortCategories } from './sort-categories';
+import { getSpendingPace } from './spending-pace';
 import * as goalNoteActions from './template-notes';
 
 export type BudgetHandlers = {
@@ -70,6 +71,7 @@ export type BudgetHandlers = {
   'budget/store-note-cleanups': typeof storeNoteCleanups;
   'budget/render-note-templates': typeof goalNoteActions.unparse;
   'budget/create-cleanup-group': typeof cleanupGroupActions.createCleanupGroup;
+  'budget/spending-pace': typeof getSpendingPace;
 };
 
 export const app = createApp<BudgetHandlers>();
@@ -178,6 +180,8 @@ app.method(
 app.method('budget/project-targets', goalActions.projectTargets);
 // Also read-only: reads cached sheet values, writes nothing.
 app.method('budget/past-spending', getPastSpending);
+// Read-only as well: queries transactions to derive a spending rhythm.
+app.method('budget/spending-pace', getSpendingPace);
 app.method(
   'budget/store-note-templates',
   mutator(goalNoteActions.storeNoteTemplates),

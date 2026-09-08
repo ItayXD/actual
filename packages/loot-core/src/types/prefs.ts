@@ -14,6 +14,7 @@ export type FeatureFlag =
   | 'mobileCalculator'
   | 'monteCarloReport'
   | 'budgetTargets'
+  | 'spendingPace'
   | 'planPage';
 
 /**

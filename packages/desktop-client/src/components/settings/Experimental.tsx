@@ -201,6 +201,18 @@ export function ExperimentalFeatures() {
               </View>
             )}
             <FeatureToggle
+              flag="spendingPace"
+              note={
+                <Trans>
+                  Adds a usage bar to the Balance column showing how much of a
+                  category is spent, and how long it is forecast to last at
+                  your usual spending rhythm.
+                </Trans>
+              }
+            >
+              <Trans>Spending pace</Trans>
+            </FeatureToggle>
+            <FeatureToggle
               flag="actionTemplating"
               feedbackLink="https://github.com/actualbudget/actual/issues/3606"
               note={

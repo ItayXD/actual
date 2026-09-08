@@ -19,6 +19,7 @@ import { css } from '@emotion/css';
 import { t } from 'i18next';
 
 import { BalanceWithCarryover } from '#components/budget/BalanceWithCarryover';
+import { CategoryBalanceUsage } from '#components/budget/pace/CategoryBalanceUsage';
 import { TargetProgressBar } from '#components/budget/targets/TargetProgressBar';
 import { makeTargetAmountStyle } from '#components/budget/targets/targetStatus';
 import { useCategoryTarget } from '#components/budget/targets/useCategoryTarget';
@@ -512,6 +513,12 @@ export const CategoryMonth = memo(function CategoryMonth({
               longGoal={trackingBudget.catLongGoal(category.id)}
             />
           </Button>
+
+          <CategoryBalanceUsage
+            category={category}
+            month={month}
+            tooltipDisabled={balanceMenuOpen}
+          />
 
           <Popover
             triggerRef={triggerBalanceMenuRef}

@@ -17,6 +17,7 @@ import * as monthUtils from '@actual-app/core/shared/months';
 import { css } from '@emotion/css';
 
 import { BalanceWithCarryover } from '#components/budget/BalanceWithCarryover';
+import { CategoryBalanceUsage } from '#components/budget/pace/CategoryBalanceUsage';
 import { TargetProgressBar } from '#components/budget/targets/TargetProgressBar';
 import { makeTargetAmountStyle } from '#components/budget/targets/targetStatus';
 import { useCategoryTarget } from '#components/budget/targets/useCategoryTarget';
@@ -559,6 +560,12 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
             tooltipDisabled={balanceMenuOpen}
           />
         </Button>
+
+        <CategoryBalanceUsage
+          category={category}
+          month={month}
+          tooltipDisabled={balanceMenuOpen}
+        />
 
         <Popover
           triggerRef={balanceMenuTriggerRef}

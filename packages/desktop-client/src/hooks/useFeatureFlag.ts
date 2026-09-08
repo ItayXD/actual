@@ -18,6 +18,7 @@ const DEFAULT_FEATURE_FLAG_STATE: Record<FeatureFlag, boolean> = {
   mobileCalculator: false,
   monteCarloReport: false,
   budgetTargets: false,
+  spendingPace: false,
   planPage: false,
 };
 
