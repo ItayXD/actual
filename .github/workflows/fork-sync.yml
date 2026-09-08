@@ -1,0 +1,341 @@
+# Notices each new vanilla Actual release and lands a reviewable PR that merges
+# upstream into fork/main. The merge itself is always a human decision.
+#
+# Why this exists: the budget file is shared with a vanilla sync server on
+# PikaPods, so falling behind upstream is not merely stale — per FORK.md, any
+# newer client that touches the file migrates db.sqlite forward and this client
+# then trips `out-of-sync-migrations`. Upstream ships ~monthly, so the only thing
+# missing was something that *notices*.
+#
+# Why it merges upstream/master and not the release tag:
+#   Upstream keeps one long-lived `release` branch and tags it. Those tags are
+#   NOT ancestors of master (release cuts are squash-merged onto `release`, so
+#   its merge-base with master runs months stale), but every functional release
+#   commit IS already on master — fixes land on master first and are
+#   cherry-picked forward. Merging the tag would replay months of cherry-pick
+#   duplicates; merging master is content-equivalent-or-newer, keeps FORK.md's
+#   ff-only mirror intact, and satisfies the "never be behind" rule. The release
+#   is only the clock.
+#
+# PREREQUISITES (one-time, both are GitHub settings, not code):
+#   1. The fork's default branch must be `fork/main`. GitHub runs `schedule`
+#      and `workflow_dispatch` only from the default branch, and FORK.md forbids
+#      committing to `master` (it is a pristine mirror) — so this file can only
+#      live on fork/main. Settings -> General -> Default branch.
+#   2. Scheduled workflows are disabled by default in a fork. Enable this one
+#      once: Actions tab, or `gh workflow enable "Fork Upstream Sync"`. A private
+#      repo is exempt from the 60-day inactivity auto-disable, so no keepalive.
+name: Fork Upstream Sync
+
+defaults:
+  run:
+    shell: bash
+
+on:
+  schedule:
+    # 06:00 UTC. Upstream's version bump lands on master in the first days of a
+    # month; a daily poll costs seconds on the ~29 days it finds nothing.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Sync even when the release has not changed'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # fast-forward master, push the sync branch
+  pull-requests: write # create/update the sync PR
+  actions: write # re-disable upstream workflows after a merge
+
+# Never let two syncs race on the mirror. Queue rather than cancel: a cancelled
+# run could leave master advanced with no PR opened.
+concurrency:
+  group: fork-sync
+  cancel-in-progress: false
+
+env:
+  # The fork's own workflows, by FILE NAME. Must not be a `fork-*` glob:
+  # fork-pr-welcome.yml is upstream's file despite its name, and has to stay
+  # disabled like the rest.
+  FORK_WORKFLOWS: 'fork-desktop.yml fork-sync.yml'
+  SYNC_BRANCH: fork/sync-upstream
+  VERSION_FILE: packages/desktop-client/package.json
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          # Unlike fork-desktop.yml, this workflow pushes, so credentials stay.
+          persist-credentials: true
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/actualbudget/actual.git 2>/dev/null || true
+          git fetch --quiet upstream master
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      # The trigger, stateless: upstream bumps `version` in 7 package.json files
+      # on master via its `🔖 (X.Y.Z)` PR, and this fork touches no version
+      # field. So a difference means a release landed; equality means we already
+      # carry it. Self-healing across missed nights and partial runs, and it
+      # picks up hotfixes (26.9.1) for free.
+      - name: Detect new release
+        id: detect
+        run: |
+          version_of() {
+            git show "$1:$VERSION_FILE" |
+              node -p "JSON.parse(require('fs').readFileSync(0)).version"
+          }
+          upstream_version=$(version_of upstream/master)
+          fork_version=$(version_of origin/fork/main)
+          incoming=$(git rev-list --count origin/fork/main..upstream/master)
+
+          echo "upstream=$upstream_version" >>"$GITHUB_OUTPUT"
+          echo "fork=$fork_version" >>"$GITHUB_OUTPUT"
+          echo "incoming=$incoming" >>"$GITHUB_OUTPUT"
+
+          if [ "$upstream_version" != "$fork_version" ]; then
+            echo "New release: $fork_version -> $upstream_version ($incoming commits)"
+            echo "sync=true" >>"$GITHUB_OUTPUT"
+          elif [ "${{ inputs.force }}" = 'true' ]; then
+            echo "Same release ($upstream_version) but force requested ($incoming commits)"
+            echo "sync=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "Still on $upstream_version — nothing to do."
+            echo "sync=false" >>"$GITHUB_OUTPUT"
+          fi
+
+          {
+            echo "### Fork upstream sync"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| fork/main | \`$fork_version\` |"
+            echo "| upstream/master | \`$upstream_version\` |"
+            echo "| commits behind | $incoming |"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      # FORK.md: master is a pristine ff-only mirror, never committed to. Pushing
+      # a ref directly gets ff-only semantics for free — git rejects a
+      # non-fast-forward — without needing a local checkout of master. This is
+      # deliberately done BEFORE the merge is validated: advancing the mirror is
+      # correct regardless of whether fork/main can absorb it, and
+      # check-migrations.ts reads origin/master.
+      - name: Advance the master mirror
+        if: steps.detect.outputs.sync == 'true'
+        run: |
+          if ! git push origin upstream/master:refs/heads/master; then
+            echo "::error::master is not a fast-forward of upstream/master — something was committed to it. FORK.md requires it to stay a pristine mirror. Inspect: git log --oneline upstream/master..origin/master"
+            exit 1
+          fi
+
+      # One stable branch, force-updated, rather than fork/sync-v<version>: it
+      # means exactly one sync PR ever exists, always reflecting current
+      # upstream, so a second release landing before the first PR merges just
+      # updates it instead of leaving a stale PR to be reconciled.
+      #
+      # The branch is a plain pointer at the upstream mirror commit — nothing
+      # with conflict markers is ever pushed. A PR from it into fork/main is
+      # therefore honest whether the merge is clean or conflicted, and merging it
+      # produces exactly the merge commit FORK.md wants (master -> fork/main,
+      # never a rebase).
+      - name: Update the sync branch
+        if: steps.detect.outputs.sync == 'true'
+        run: git push --force origin upstream/master:refs/heads/${{ env.SYNC_BRANCH }}
+
+      # Judge the merge without ever pushing it. Conflicts are an expected
+      # outcome of a sync, not a workflow failure — they get reported and
+      # resolved on the Mac (bin/fork-sync), where the app can actually be built.
+      - name: Merge upstream into fork/main (ephemeral)
+        id: merge
+        if: steps.detect.outputs.sync == 'true'
+        run: |
+          git checkout --detach origin/fork/main
+          if git merge --no-edit -m 'ephemeral merge for validation' upstream/master; then
+            echo "status=clean" >>"$GITHUB_OUTPUT"
+          else
+            echo "status=conflicted" >>"$GITHUB_OUTPUT"
+            git diff --name-only --diff-filter=U >/tmp/conflicts.txt
+            echo "Conflicted paths:"
+            cat /tmp/conflicts.txt
+          fi
+
+      - name: Build the risk report
+        id: report
+        if: steps.detect.outputs.sync == 'true'
+        run: |
+          base=$(git merge-base origin/fork/main upstream/master)
+          report=/tmp/report.md
+
+          {
+            echo "🤖 Merges upstream **${{ steps.detect.outputs.upstream }}** into \`fork/main\`."
+            echo "Opened automatically by \`.github/workflows/fork-sync.yml\`; review and merge by hand."
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| release | \`${{ steps.detect.outputs.fork }}\` → \`${{ steps.detect.outputs.upstream }}\` |"
+            echo "| upstream commits | ${{ steps.detect.outputs.incoming }} |"
+            echo "| merge base | \`$(git rev-parse --short "$base")\` |"
+            echo
+          } >"$report"
+
+          # Danger zones: each is a FORK.md hard rule. Upstream touching one is
+          # not a violation, but it is the thing to read before merging — a new
+          # upstream migration is exactly why the "never be behind another
+          # client" rule exists.
+          echo "#### Sync-compatibility danger zones touched by upstream" >>"$report"
+          echo >>"$report"
+          found=0
+          check_zone() {
+            hits=$(git diff --name-only "$base..upstream/master" -- $2)
+            if [ -n "$hits" ]; then
+              found=1
+              echo "- **$1**" >>"$report"
+              printf '  - `%s`\n' $hits >>"$report"
+            fi
+          }
+          check_zone 'new/changed migrations (FORK.md 1, 7)' 'packages/loot-core/migrations/'
+          check_zone 'upload format handshake (rule 5)' 'packages/loot-core/src/server/cloud-storage.ts'
+          check_zone 'CRDT message application (rules 2, 3)' 'packages/loot-core/src/server/sync/index.ts'
+          check_zone 'migration validity check (rule 1)' 'packages/loot-core/src/server/migrate/migrations.ts'
+          check_zone 'sync server validation (rules 5, 6)' 'packages/sync-server/src/app-sync/validation.js'
+          [ "$found" -eq 0 ] && echo "_None — upstream touched no sync-critical path._" >>"$report"
+          echo >>"$report"
+
+          # The conflict predictor: files changed on both sides of the merge base.
+          echo "#### Files changed by both the fork and upstream" >>"$report"
+          echo >>"$report"
+          shared=$(comm -12 \
+            <(git diff --name-only "$base..origin/fork/main" | sort) \
+            <(git diff --name-only "$base..upstream/master" | sort))
+          if [ -n "$shared" ]; then
+            printf -- '- `%s`\n' $shared >>"$report"
+          else
+            echo "_None._" >>"$report"
+          fi
+          echo >>"$report"
+
+          if [ '${{ steps.merge.outputs.status }}' = 'conflicted' ]; then
+            {
+              echo "#### ⚠️ This merge conflicts"
+              echo
+              echo "Resolve locally — it needs a build to verify:"
+              echo '```bash'
+              echo 'bin/fork-sync'
+              echo '```'
+              echo
+              echo "Conflicted paths:"
+              echo
+              printf -- '- `%s`\n' $(cat /tmp/conflicts.txt)
+            } >>"$report"
+          fi
+          cat "$report" >>"$GITHUB_STEP_SUMMARY"
+
+      # Open or update the single sync PR before validating, so the report is
+      # visible even if validation later fails or times out.
+      - name: Open or update the sync PR
+        id: pr
+        if: steps.detect.outputs.sync == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          title='[AI] Sync upstream ${{ steps.detect.outputs.upstream }} into fork/main'
+          number=$(gh pr list --head "$SYNC_BRANCH" --base fork/main --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --title "$title" --body-file /tmp/report.md
+            echo "Updated #$number"
+          else
+            number=$(gh pr create --head "$SYNC_BRANCH" --base fork/main \
+              --title "$title" --body-file /tmp/report.md |
+              sed 's#.*/##')
+            echo "Created #$number"
+          fi
+          echo "number=$number" >>"$GITHUB_OUTPUT"
+
+      # Everything below validates the ephemeral merge still checked out above.
+      # Upstream's own check.yml is unusable here: all 40 of its jobs target
+      # depot-* runners, which never resolve in a fork.
+      - name: Compatibility gate
+        id: compat
+        if: steps.merge.outputs.status == 'clean'
+        # Deliberately before `Set up environment`: this needs only git, and it is
+        # the one check that must never be skipped because `yarn --immutable`
+        # tripped over a merged yarn.lock.
+        run: bin/fork-compat-check upstream/master HEAD
+
+      - name: Set up environment
+        if: steps.merge.outputs.status == 'clean'
+        uses: ./.github/actions/setup
+
+      - name: Check migrations
+        if: steps.merge.outputs.status == 'clean'
+        run: yarn workspace @actual-app/ci-actions tsx bin/check-migrations.ts
+
+      - name: Typecheck
+        if: steps.merge.outputs.status == 'clean'
+        run: yarn typecheck
+
+      - name: Lint
+        if: steps.merge.outputs.status == 'clean'
+        run: yarn lint
+
+      - name: Test
+        if: steps.merge.outputs.status == 'clean'
+        run: yarn test
+
+      - name: Record validation outcome on the PR
+        if: always() && steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo
+            echo "#### Validation"
+            echo
+            if [ '${{ steps.merge.outputs.status }}' = 'conflicted' ]; then
+              echo "Skipped — the merge conflicts (see above)."
+            elif [ '${{ job.status }}' = 'success' ]; then
+              echo "✅ compat gate, check-migrations, typecheck, lint and tests all pass on the merge result."
+            else
+              echo "❌ Something failed on the merge result — [see the run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
+              echo
+              echo "Before assuming the merge is at fault, check whether upstream/master is itself red at this commit."
+            fi
+          } >>/tmp/report.md
+          gh pr edit '${{ steps.pr.outputs.number }}' --body-file /tmp/report.md
+
+      # FORK.md: newly added upstream workflows arrive enabled, and every one of
+      # them targets depot-* runners that never resolve in a fork — so they queue
+      # forever rather than failing. Worse, the tag-triggered ones can actually
+      # run: publish-npm-packages.yml's guard is
+      # `github.event_name == 'push' || repository.fork == false`, whose first
+      # clause is true for a tag push in a fork. Re-tightening after every sync
+      # is what stops that becoming something to remember.
+      - name: Re-disable upstream workflows
+        if: always() && steps.detect.outputs.sync == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow list --all --limit 200 --json id,name,path,state \
+            --jq '.[] | select(.state == "active") | [.id, .path, .name] | @tsv' |
+            while IFS=$'\t' read -r id path name; do
+              file=$(basename "$path")
+              case " $FORK_WORKFLOWS " in
+                *" $file "*)
+                  echo "keeping   $file ($name)"
+                  continue
+                  ;;
+              esac
+              if gh workflow disable "$id"; then
+                echo "disabled  $file ($name)"
+              else
+                echo "::warning::could not disable $file"
+              fi
+            done

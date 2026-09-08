@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+#
+# The local half of the upstream sync (see .github/workflows/fork-sync.yml for
+# the half that notices a release and opens the PR).
+#
+# Conflict resolution has to happen here rather than in CI: resolving a conflict
+# in loot-core means building and running the app to know the resolution is
+# right, and only this machine can do that. This script is FORK.md's "Branches"
+# ritual made repeatable, plus the compatibility gate.
+#
+# Usage: bin/fork-sync [--no-checks]
+#
+#   --no-checks   stop after the merge; skip compat-check/typecheck/test.
+#
+# It never pushes and never tags — review the merge, then push yourself.
+
+set -uo pipefail
+
+cd "$(dirname "$0")/.." || exit 2
+
+run_checks=1
+for arg in "$@"; do
+  case "$arg" in
+    --no-checks) run_checks=0 ;;
+    -h | --help)
+      sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0 ;;
+    *)
+      echo "fork-sync: unknown argument '$arg'" >&2
+      exit 2 ;;
+  esac
+done
+
+say() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
+die() {
+  printf '\n\033[31mfork-sync: %s\033[0m\n' "$1" >&2
+  exit 1
+}
+
+# --- Refuse to fight the working copy. This branch usually has work in progress
+# on it, and a merge that trips over a dirty tree half-way leaves a mess that is
+# much worse than being told to stash.
+[ -z "$(git status --porcelain)" ] ||
+  die "working tree is dirty. Commit or stash first — a merge into a dirty tree is not recoverable cleanly.
+
+$(git status --short)"
+
+branch=$(git symbolic-ref --short -q HEAD)
+[ "$branch" = "fork/main" ] ||
+  die "on '$branch'; this must run on fork/main (FORK.md: merge master into fork/main, never rebase)."
+
+version_of() {
+  git show "$1:packages/desktop-client/package.json" 2>/dev/null |
+    node -p "JSON.parse(require('fs').readFileSync(0)).version" 2>/dev/null
+}
+
+say "Fetching origin and upstream"
+git fetch --quiet origin || die "could not fetch origin"
+git fetch --quiet upstream master || die "could not fetch upstream"
+
+fork_version=$(version_of HEAD)
+upstream_version=$(version_of upstream/master)
+[ -n "$upstream_version" ] || die "could not read the version on upstream/master"
+
+if [ "$fork_version" = "$upstream_version" ]; then
+  behind=$(git rev-list --count HEAD..upstream/master)
+  if [ "$behind" -eq 0 ]; then
+    say "Already in sync with upstream/master at $upstream_version — nothing to do."
+    exit 0
+  fi
+  say "Same release ($upstream_version), but upstream/master is $behind commit(s) ahead."
+  echo "    Syncing anyway: FORK.md's rule is that this fork must never be behind"
+  echo "    any client touching the budget file."
+else
+  say "New upstream release: $fork_version -> $upstream_version"
+fi
+
+# --- Advance the mirror. FORK.md: master is a pristine mirror, ff-only, never
+# committed to. A non-ff here means that rule was broken, and silently merging
+# would bury the evidence.
+say "Advancing master (ff-only)"
+git checkout --quiet master || die "could not check out master"
+if ! git merge --ff-only upstream/master; then
+  git checkout --quiet fork/main
+  die "master is not a fast-forward of upstream/master — something was committed to it.
+Inspect with: git log --oneline upstream/master..master
+FORK.md requires master to stay a pristine mirror; fix that before syncing."
+fi
+git checkout --quiet fork/main || die "could not return to fork/main"
+
+# --- The merge itself.
+say "Merging master into fork/main"
+incoming=$(git rev-list --count HEAD..master)
+echo "    $incoming upstream commit(s) incoming"
+
+# Warn about the files that are actually likely to conflict, before git says so,
+# so a conflict is expected rather than alarming.
+shared=$(comm -12 \
+  <(git diff --name-only "$(git merge-base master HEAD)" HEAD | sort) \
+  <(git diff --name-only "$(git merge-base master HEAD)" master | sort))
+if [ -n "$shared" ]; then
+  echo "    files changed on both sides (conflict candidates):"
+  printf '      %s\n' $shared
+fi
+
+if git merge --no-edit -m "[AI] Merge upstream $upstream_version into fork/main" master; then
+  say "Merge clean."
+else
+  conflicts=$(git diff --name-only --diff-filter=U)
+  cat >&2 <<MSG
+
+$(printf '\033[31mMerge conflicted.\033[0m') Resolve these, then re-run with --no-checks skipped:
+
+$(printf '  %s\n' $conflicts)
+
+FORK.md guidance for the known cases:
+  yarn.lock         take upstream's wholesale, then regenerate:
+                      git checkout --theirs yarn.lock && yarn install && git add yarn.lock
+  package.json      the fork only edits the 'imports' map; upstream only bumps
+                    'version'. Keep both.
+  loot-core/budget  the fork's target/plan work lives here. Never resolve toward
+                    writing goal/long_goal as a side effect of viewing a budget
+                    (FORK.md rule 8).
+
+Do NOT run 'yarn lint:fix' to tidy the result — it rewrites untouched files and
+generates hundreds of conflict hunks (FORK.md 'Keeping merges cheap' #4).
+
+When done:  git add -A && git commit && bin/fork-compat-check && yarn typecheck && yarn test
+MSG
+  exit 1
+fi
+
+if [ "$run_checks" -eq 0 ]; then
+  say "Skipping checks (--no-checks). Run bin/fork-compat-check before pushing."
+  exit 0
+fi
+
+say "Compatibility gate"
+bin/fork-compat-check origin/master HEAD ||
+  die "the merge result violates a FORK.md hard rule (above). Do not push it."
+
+node_major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null)
+if [ "$node_major" != "24" ]; then
+  say "node is v${node_major:-unknown}, but this repo pins 24 (.nvmrc)"
+  echo "    Skipping typecheck/test. Run them with:"
+  echo "      export PATH=\"/opt/homebrew/opt/node@24/bin:\$PATH\""
+  echo "      yarn install --immutable && yarn typecheck && yarn test"
+  exit 0
+fi
+
+say "Typecheck"
+yarn typecheck || die "typecheck failed on the merge result."
+
+say "Tests"
+if ! yarn test; then
+  cat >&2 <<'MSG'
+
+Tests failed. Before assuming the merge broke something: if you have built the
+desktop app since the last install, every DB-backed test fails with
+"requires NODE_MODULE_VERSION 137" because the build recompiled better-sqlite3
+against Electron's ABI. Fix with:
+
+  yarn rebuild better-sqlite3 && yarn test
+
+MSG
+  exit 1
+fi
+
+say "Sync complete: fork/main is at upstream $upstream_version"
+echo "    Review the merge, then: git push origin fork/main"
+echo "    A desktop build: bin/fork-build-mac (mac) or the Fork Desktop Build workflow (windows)"

@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+#
+# Asserts FORK.md's sync-compatibility hard rules against the fork's own delta.
+#
+# The budget file on PikaPods is shared with vanilla clients, so a violation here
+# does not break this fork — it corrupts the shared file for every other client
+# (`out-of-sync-migrations` / `invalid-schema`). FORK.md states these rules as
+# prose; this script is the gate that stops them rotting.
+#
+# Usage: bin/fork-compat-check [base-ref] [head-ref]
+#
+#   base-ref  the pristine upstream mirror. Default: origin/master, else master.
+#   head-ref  the fork revision to judge. Default: HEAD.
+#
+# Diffs are three-dot (`base...head`), i.e. merge-base..head, so only the fork's
+# own changes are judged — upstream's changes are never counted as violations.
+# That is what makes the script safe to run on a freshly merged tree: it answers
+# "what does the fork add on top of vanilla", not "what changed since I last ran".
+#
+# Exits 0 if every rule holds, 1 otherwise. All rules are always evaluated, so a
+# single run reports every violation rather than only the first.
+
+set -uo pipefail
+
+die() {
+  echo "fork-compat-check: $1" >&2
+  exit 2
+}
+
+cd "$(dirname "$0")/.." || die "cannot cd to repo root"
+
+base=${1:-}
+if [ -z "$base" ]; then
+  for candidate in origin/master master; do
+    if git rev-parse --verify --quiet "$candidate" >/dev/null; then
+      base=$candidate
+      break
+    fi
+  done
+fi
+[ -n "$base" ] ||
+  die "no base ref: pass one, or create origin/master (the upstream mirror)."
+git rev-parse --verify --quiet "$base" >/dev/null ||
+  die "base ref '$base' does not exist."
+
+head=${2:-HEAD}
+git rev-parse --verify --quiet "$head" >/dev/null ||
+  die "head ref '$head' does not exist."
+
+# An unrelated-histories base would make every fork file look added, turning the
+# report into noise. Fail loudly instead of emitting a wall of false positives.
+git merge-base "$base" "$head" >/dev/null 2>&1 ||
+  die "'$base' and '$head' share no history — is '$base' really the mirror?"
+
+echo "fork-compat-check: judging $head against $base"
+echo "                   (merge-base $(git rev-parse --short "$(git merge-base "$base" "$head")"))"
+echo
+
+failures=0
+
+# $1 = FORK.md rule number(s), $2 = what went wrong, $3 = the offending paths
+report() {
+  failures=$((failures + 1))
+  echo "FAIL  [FORK.md rule $1] $2" >&2
+  printf '        %s\n' $3 >&2
+  echo >&2
+}
+
+pass() { echo "ok    [FORK.md rule $1] $2"; }
+
+# --- Rules 1 & 7: migrations are the single most dangerous thing a fork can add.
+# A fork-only migration writes a row into the budget file's `__migrations__`
+# table, which is uploaded whole; `checkDatabaseValidity` matches applied IDs to
+# the on-disk list *by position*, so every vanilla client then trips
+# `out-of-sync-migrations`. Modifying a shipped migration is equally fatal
+# (append-only: existing installs never re-run it).
+hits=$(git diff --name-only --diff-filter=AMR "$base...$head" \
+  -- packages/loot-core/migrations/)
+if [ -n "$hits" ]; then
+  report "1, 7" "the fork adds or modifies migrations" "$hits"
+else
+  pass "1, 7" "no fork-added or fork-modified migrations"
+fi
+
+# --- Rules 2 & 3: new tables/columns. CRDT messages are applied as raw SQL, so a
+# vanilla client receiving a message naming an unknown table or column throws
+# `invalid-schema`. Any new .sql the fork introduces is schema by definition.
+hits=$(git diff --name-only --diff-filter=AR "$base...$head" -- '*.sql')
+if [ -n "$hits" ]; then
+  report "2, 3" "the fork adds .sql files (new schema)" "$hits"
+else
+  pass "2, 3" "no fork-added .sql files"
+fi
+
+# --- Rule 5: the sync format handshake. Changing either side of it makes this
+# client incompatible with the vanilla server it syncs against.
+format_header() {
+  git show "$1:packages/loot-core/src/server/cloud-storage.ts" 2>/dev/null |
+    sed -n "s/.*'X-ACTUAL-FORMAT': *'\([^']*\)'.*/\1/p" | head -1
+}
+base_format=$(format_header "$base")
+head_format=$(format_header "$head")
+if [ -z "$base_format" ]; then
+  # Upstream moved or renamed the header — the check is now blind, which is worse
+  # than a violation because it fails silently. Treat it as a failure.
+  report 5 \
+    "cannot read X-ACTUAL-FORMAT on $base — cloud-storage.ts changed shape, update this check" \
+    "packages/loot-core/src/server/cloud-storage.ts"
+elif [ "$base_format" != "$head_format" ]; then
+  report 5 \
+    "the fork changes X-ACTUAL-FORMAT ($base_format -> ${head_format:-missing})" \
+    "packages/loot-core/src/server/cloud-storage.ts"
+else
+  pass 5 "X-ACTUAL-FORMAT unchanged ($base_format)"
+fi
+
+sync_version() {
+  git show "$1:packages/sync-server/src/app-sync/validation.js" 2>/dev/null |
+    sed -n 's/.*SYNC_FORMAT_VERSION *= *\([0-9]*\).*/\1/p' | head -1
+}
+base_sync=$(sync_version "$base")
+head_sync=$(sync_version "$head")
+if [ -z "$base_sync" ]; then
+  report 5 \
+    "cannot read SYNC_FORMAT_VERSION on $base — validation.js changed shape, update this check" \
+    "packages/sync-server/src/app-sync/validation.js"
+elif [ "$base_sync" != "$head_sync" ]; then
+  report 5 \
+    "the fork changes SYNC_FORMAT_VERSION ($base_sync -> ${head_sync:-missing})" \
+    "packages/sync-server/src/app-sync/validation.js"
+else
+  pass 5 "SYNC_FORMAT_VERSION unchanged ($base_sync)"
+fi
+
+# --- Rule 6: PikaPods runs the vanilla sync server, so anything the fork changes
+# here is dead code that only earns merge conflicts.
+hits=$(git diff --name-only "$base...$head" -- packages/sync-server/)
+if [ -n "$hits" ]; then
+  report 6 "the fork modifies the sync-server package" "$hits"
+else
+  pass 6 "sync-server package untouched"
+fi
+
+echo
+if [ "$failures" -ne 0 ]; then
+  echo "fork-compat-check: $failures rule violation(s) — see FORK.md 'Sync compatibility — hard rules'." >&2
+  exit 1
+fi
+echo "fork-compat-check: all rules hold."
