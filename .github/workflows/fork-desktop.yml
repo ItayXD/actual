@@ -113,11 +113,36 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ startsWith(github.ref, 'refs/tags/fork-v') && github.ref_name || format('fork-v0.0.0-{0}', github.run_number) }}
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 || \
-            gh release create "$TAG" \
-              --title "Actual (fork) $TAG" \
-              --notes "Unsigned personal build. On macOS: xattr -d com.apple.quarantine the DMG before opening. On Windows: More info -> Run anyway." \
-              --prerelease
-          gh release upload "$TAG" --clobber \
-            packages/desktop-electron/dist/*.dmg \
-            packages/desktop-electron/dist/*.exe || true
+          # Collect only what this leg actually built. Globbing both .dmg and
+          # .exe unconditionally left one pattern unexpanded on each runner, so
+          # `gh release upload` failed on a nonexistent file and took the real
+          # files down with it — silently, because the command ended in
+          # `|| true`. nullglob drops empty patterns instead.
+          shopt -s nullglob
+          installers=(
+            packages/desktop-electron/dist/*.dmg
+            packages/desktop-electron/dist/*.exe
+          )
+          if [ ${#installers[@]} -eq 0 ]; then
+            echo "No installers were produced - refusing to publish an empty release" >&2
+            exit 1
+          fi
+          echo "Uploading: ${installers[*]}"
+
+          # Both matrix legs reach here, so tolerate the other having created
+          # the release first — but never tolerate a failed upload.
+          gh release create "$TAG" \
+            --title "Actual (fork) $TAG" \
+            --notes "Unsigned personal build. On macOS: xattr -d com.apple.quarantine the DMG before opening. On Windows: More info -> Run anyway." \
+            --prerelease \
+            || gh release view "$TAG" >/dev/null
+
+          gh release upload "$TAG" --clobber "${installers[@]}"
+
+          # Assert the assets really landed, so a green run cannot mean an
+          # empty release.
+          gh release view "$TAG" --json assets --jq '.assets[].name' | tee /tmp/assets.txt
+          if [ ! -s /tmp/assets.txt ]; then
+            echo "Release $TAG still has no assets after upload" >&2
+            exit 1
+          fi
