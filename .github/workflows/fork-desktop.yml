@@ -20,6 +20,13 @@
 # usually the cheaper split.
 name: Fork Desktop Build
 
+# bin/package-electron is a bash script, and the Windows runner defaults to
+# PowerShell, which does not honour a shebang — so bash is the default here,
+# exactly as upstream's electron workflows do it.
+defaults:
+  run:
+    shell: bash
+
 on:
   workflow_dispatch:
     inputs:
@@ -71,7 +78,6 @@ jobs:
         uses: ./.github/actions/setup
 
       - name: Stamp fork version
-        shell: bash
         run: |
           BASE=$(node -p "require('./packages/desktop-electron/package.json').version")
           npm version "${BASE}-fork.$(date -u +%Y%m%d%H%M)" \
@@ -103,7 +109,6 @@ jobs:
 
       - name: Publish release
         if: ${{ startsWith(github.ref, 'refs/tags/fork-v') || inputs.make_release }}
-        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ startsWith(github.ref, 'refs/tags/fork-v') && github.ref_name || format('fork-v0.0.0-{0}', github.run_number) }}
