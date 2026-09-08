@@ -161,6 +161,12 @@ export function PlanCategoryRow({
       <PlannedCell item={item} onEditAutomations={onEditAutomations} />
 
       <PrivacyFilter>
+        <FinancialText style={{ ...columnStyle, color: theme.pageTextSubdued }}>
+          {format(item.pastBudgeted, 'financial')}
+        </FinancialText>
+      </PrivacyFilter>
+
+      <PrivacyFilter>
         <FinancialText style={columnStyle}>
           {format(item.pastSpending, 'financial')}
         </FinancialText>

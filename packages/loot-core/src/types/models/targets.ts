@@ -73,4 +73,9 @@ export type PastSpending = {
    * signed positive for an expense.
    */
   byCategory: Record<CategoryEntity['id'], number>;
+  /**
+   * Average amount budgeted per month per category over the same window, in
+   * minor units. What was planned historically, as opposed to what was spent.
+   */
+  budgetedByCategory: Record<CategoryEntity['id'], number>;
 };

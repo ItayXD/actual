@@ -4,8 +4,8 @@ import type { CategoryEntity } from '#types/models';
 import type { PastSpending, SpendingBasis } from '#types/models/targets';
 
 import {
+  getAverageMonths,
   getAverageStartMonth,
-  getCategoryAverage,
   getSheetValue,
   isTrackingBudget,
 } from './actions';
@@ -32,8 +32,8 @@ function monthsForBasis(basis: SpendingBasis, startMonth: string): number {
 }
 
 /**
- * What each category actually cost per month, and what income actually was,
- * averaged over the chosen window.
+ * What each category actually cost per month, what was budgeted for it, and
+ * what income actually was, all averaged over the chosen window.
  *
  * Read-only: it reads cached sheet values and writes nothing.
  *
@@ -59,16 +59,38 @@ export async function getPastSpending({
   );
 
   const byCategory: Record<CategoryEntity['id'], number> = {};
+  const budgetedByCategory: Record<CategoryEntity['id'], number> = {};
   for (const category of categories) {
-    const average = await getCategoryAverage({
+    // One month list drives both averages, so "spent" and "budgeted" always
+    // cover exactly the same months for a given category.
+    const months = await getAverageMonths({
       month,
       maxMonths,
       categoryId: category.id,
     });
+
+    byCategory[category.id] = 0;
+    budgetedByCategory[category.id] = 0;
+    if (months.length === 0) {
+      continue;
+    }
+
+    let spent = 0;
+    let budgeted = 0;
+    for (const prevMonth of months) {
+      const sheetName = monthUtils.sheetForMonth(prevMonth);
+      spent += await getSheetValue(sheetName, `sum-amount-${category.id}`);
+      budgeted += await getSheetValue(sheetName, `budget-${category.id}`);
+    }
+
+    const spentAverage = Math.round(spent / months.length);
     // `sum-amount` is negative for an expense; report spending as positive so
     // it lines up with the planned column. `|| 0` collapses negative zero,
     // which would otherwise format as "-0.00".
-    byCategory[category.id] = (category.is_income ? average : -average) || 0;
+    byCategory[category.id] =
+      (category.is_income ? spentAverage : -spentAverage) || 0;
+    // `budget-` is already signed the way the plan is, so it needs no flip.
+    budgetedByCategory[category.id] = Math.round(budgeted / months.length) || 0;
   }
 
   let incomeTotal = 0;
@@ -98,5 +120,6 @@ export async function getPastSpending({
     basis,
     income: incomeMonths > 0 ? Math.round(incomeTotal / incomeMonths) : 0,
     byCategory,
+    budgetedByCategory,
   };
 }

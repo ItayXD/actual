@@ -47,6 +47,9 @@ function ColumnHeaders() {
         <Trans>Planned</Trans>
       </Text>
       <Text style={{ ...styles.smallText, ...columnHeaderStyle }}>
+        <Trans>Past budgeted</Trans>
+      </Text>
+      <Text style={{ ...styles.smallText, ...columnHeaderStyle }}>
         <Trans>Past expenses</Trans>
       </Text>
     </View>
@@ -78,6 +81,11 @@ function GroupHeader({ item }: { item: PlanGroup }) {
           }}
         >
           {format(item.target, 'financial')}
+        </FinancialText>
+      </PrivacyFilter>
+      <PrivacyFilter>
+        <FinancialText style={{ ...columnHeaderStyle, fontWeight: 600 }}>
+          {format(item.pastBudgeted, 'financial')}
         </FinancialText>
       </PrivacyFilter>
       <PrivacyFilter>

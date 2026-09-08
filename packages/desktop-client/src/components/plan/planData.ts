@@ -20,6 +20,8 @@ export type PlanCategory = {
   balance: number;
   /** Average monthly spend over the chosen window, positive for an expense. */
   pastSpending: number;
+  /** Average monthly amount budgeted over the chosen window. */
+  pastBudgeted: number;
   /**
    * Plan minus history. Positive means the plan allows more than has been
    * spent; negative means the plan is below what this category usually costs.
@@ -40,6 +42,7 @@ export type PlanGroup = {
   /** Sum of fixed targets in this group; elastic categories contribute 0. */
   target: number;
   pastSpending: number;
+  pastBudgeted: number;
 };
 
 export type PlanData = {
@@ -50,6 +53,8 @@ export type PlanData = {
   totalTarget: number;
   /** Average monthly spend over the chosen window, across all groups. */
   totalPastSpending: number;
+  /** Average monthly amount budgeted over the chosen window, across all groups. */
+  totalPastBudgeted: number;
   /** Income minus what the plan asks for. Negative means the plan overcommits. */
   unplanned: number;
   /** Categories still saving toward a dated or long-term goal. */
@@ -101,12 +106,14 @@ export function buildPlanData(
       const projection = byCategory.get(category.id);
       const target = projection?.goal ?? null;
       const pastSpending = past.byCategory[category.id] ?? 0;
+      const pastBudgeted = past.budgetedByCategory[category.id] ?? 0;
       const planCategory: PlanCategory = {
         category,
         target,
         assigned: values.budgeted[category.id] ?? 0,
         balance: values.balance[category.id] ?? 0,
         pastSpending,
+        pastBudgeted,
         vsPastSpending: target === null ? null : target - pastSpending,
         isLongGoal: projection?.longGoal ?? false,
         isElastic: projection?.isElastic ?? false,
@@ -141,17 +148,20 @@ export function buildPlanData(
       categories,
       target: sumTargets(categories),
       pastSpending: categories.reduce((sum, c) => sum + c.pastSpending, 0),
+      pastBudgeted: categories.reduce((sum, c) => sum + c.pastBudgeted, 0),
     });
   }
 
   const totalTarget = groups.reduce((sum, g) => sum + g.target, 0);
   const totalPastSpending = groups.reduce((sum, g) => sum + g.pastSpending, 0);
+  const totalPastBudgeted = groups.reduce((sum, g) => sum + g.pastBudgeted, 0);
 
   return {
     groups,
     income: past.income,
     totalTarget,
     totalPastSpending,
+    totalPastBudgeted,
     unplanned: past.income - totalTarget,
     longTerm,
     elastic,

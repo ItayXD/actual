@@ -53,6 +53,7 @@ function past(overrides: Partial<PastSpending> = {}): PastSpending {
     basis: 'last-3-months',
     income: 0,
     byCategory: {},
+    budgetedByCategory: {},
     ...overrides,
   };
 }
@@ -80,6 +81,32 @@ describe('buildPlanData', () => {
 
     expect(data.totalPastSpending).toBe(15000);
     expect(data.groups[0].pastSpending).toBe(15000);
+  });
+
+  it('sums past budgeted separately from past spending', () => {
+    const data = buildPlanData(
+      [projection('a'), projection('b')],
+      values(),
+      past({
+        byCategory: { a: 12000, b: 3000 },
+        budgetedByCategory: { a: 10000, b: 5000 },
+      }),
+      [group('g1', [cat('a'), cat('b')])],
+    );
+
+    expect(data.totalPastBudgeted).toBe(15000);
+    expect(data.groups[0].pastBudgeted).toBe(15000);
+
+    const [a, b] = data.groups[0].categories;
+    // Budgeted 10000 but spent 12000; budgeted 5000 but spent only 3000.
+    expect([a.pastBudgeted, a.pastSpending]).toEqual([10000, 12000]);
+    expect([b.pastBudgeted, b.pastSpending]).toEqual([5000, 3000]);
+  });
+
+  it('defaults past budgeted to zero for a category with no history', () => {
+    const data = buildPlanData([], values(), past(), [group('g1', [cat('a')])]);
+
+    expect(data.groups[0].categories[0].pastBudgeted).toBe(0);
   });
 
   it('takes income from the comparison window, not the current month', () => {
