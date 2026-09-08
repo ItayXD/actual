@@ -253,6 +253,18 @@ export function FinancesApp() {
                   {isNarrowWidth && <MobilePageHeaderSlot />}
 
                   <Routes>
+                    {/* Fork routes first: upstream appends new routes to the end
+                        of this list, and v6 ranks matches rather than taking the
+                        first, so the position carries no routing meaning. */}
+                    <Route
+                      path="/plan"
+                      element={
+                        <NarrowNotSupported>
+                          <PlanRoute />
+                        </NarrowNotSupported>
+                      }
+                    />
+
                     <Route
                       path="/"
                       element={<Navigate to="/budget" replace />}
@@ -368,14 +380,6 @@ export function FinancesApp() {
                       }
                     />
                     <Route path="/tags" element={<ManageTagsPage />} />
-                    <Route
-                      path="/plan"
-                      element={
-                        <NarrowNotSupported>
-                          <PlanRoute />
-                        </NarrowNotSupported>
-                      }
-                    />
                     <Route
                       path="/notifications"
                       element={<NotificationsPage />}

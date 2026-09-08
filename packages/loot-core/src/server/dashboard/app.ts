@@ -32,6 +32,9 @@ export function isWidgetType(
   type: string,
 ): type is DashboardWidgetEntity['type'] {
   return [
+    // Fork types first; upstream appends to the end of this list.
+    'plan-card',
+    'insights-card',
     'net-worth-card',
     'cash-flow-card',
     'spending-card',
@@ -46,8 +49,6 @@ export function isWidgetType(
     'balance-forecast-card',
     'age-of-money-card',
     'monte-carlo-card',
-    'plan-card',
-    'insights-card',
   ].includes(type);
 }
 

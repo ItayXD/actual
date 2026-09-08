@@ -12,6 +12,9 @@ function allWidgetTypes<T extends DashboardWidgetEntity['type'][]>(
 }
 
 const ALL_WIDGET_TYPES = allWidgetTypes(
+  // Fork types first; upstream appends to the end of this list.
+  'plan-card',
+  'insights-card',
   'net-worth-card',
   'cash-flow-card',
   'spending-card',
@@ -26,8 +29,6 @@ const ALL_WIDGET_TYPES = allWidgetTypes(
   'balance-forecast-card',
   'age-of-money-card',
   'monte-carlo-card',
-  'plan-card',
-  'insights-card',
 );
 
 describe('isWidgetType', () => {

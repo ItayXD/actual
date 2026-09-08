@@ -62,11 +62,11 @@ import { CashFlowCard } from './reports/CashFlowCard';
 import { CrossoverCard } from './reports/CrossoverCard';
 import { CustomReportListCards } from './reports/CustomReportListCards';
 import { FormulaCard } from './reports/FormulaCard';
+import { InsightsCard } from './reports/InsightsCard';
 import { MarkdownCard } from './reports/MarkdownCard';
 import { MissingReportCard } from './reports/MissingReportCard';
 import { MonteCarloCard } from './reports/monte-carlo/MonteCarloCard';
 import { NetWorthCard } from './reports/NetWorthCard';
-import { InsightsCard } from './reports/InsightsCard';
 import { PlanCard } from './reports/PlanCard';
 import { SankeyCard } from './reports/SankeyCard';
 import { SpendingCard } from './reports/SpendingCard';
@@ -308,8 +308,7 @@ export function Overview({ dashboard }: OverviewProps) {
       widget: {
         type,
         width: 4,
-        height:
-          type === 'sankey-card' || type === 'insights-card' ? 3 : 2,
+        height: type === 'sankey-card' || type === 'insights-card' ? 3 : 2,
         meta,
         dashboard_page_id: dashboard.id,
       },
@@ -589,22 +588,7 @@ export function Overview({ dashboard }: OverviewProps) {
                             onAddWidget(item);
                           }}
                           items={[
-                            {
-                              name: 'cash-flow-card' as const,
-                              text: t('Cash flow graph'),
-                            },
-                            {
-                              name: 'net-worth-card' as const,
-                              text: t('Net worth graph'),
-                            },
-                            {
-                              name: 'crossover-card' as const,
-                              text: t('Crossover point'),
-                            },
-                            {
-                              name: 'age-of-money-card' as const,
-                              text: t('Age of Money'),
-                            },
+                            // Fork entries first; upstream appends to the end.
                             ...(planPageEnabled
                               ? [
                                   {
@@ -621,6 +605,22 @@ export function Overview({ dashboard }: OverviewProps) {
                                   },
                                 ]
                               : []),
+                            {
+                              name: 'cash-flow-card' as const,
+                              text: t('Cash flow graph'),
+                            },
+                            {
+                              name: 'net-worth-card' as const,
+                              text: t('Net worth graph'),
+                            },
+                            {
+                              name: 'crossover-card' as const,
+                              text: t('Crossover point'),
+                            },
+                            {
+                              name: 'age-of-money-card' as const,
+                              text: t('Age of Money'),
+                            },
                             {
                               name: 'spending-card' as const,
                               text: t('Spending analysis'),
@@ -828,7 +828,29 @@ export function Overview({ dashboard }: OverviewProps) {
                           </MissingReportCard>
                         )}
                       >
-                        {widget.type === 'net-worth-card' ? (
+                        {/* Fork cards head the chain: the branches are mutually
+                            exclusive on widget.type, so order carries no
+                            meaning, and upstream appends new ones below. */}
+                        {widget.type === 'plan-card' && planPageEnabled ? (
+                          <PlanCard
+                            widgetId={item.i}
+                            isEditing={isEditing}
+                            meta={widget.meta}
+                            onMetaChange={newMeta =>
+                              onMetaChange(item, newMeta)
+                            }
+                          />
+                        ) : widget.type === 'insights-card' &&
+                          insightsEnabled ? (
+                          <InsightsCard
+                            widgetId={item.i}
+                            isEditing={isEditing}
+                            meta={widget.meta}
+                            onMetaChange={newMeta =>
+                              onMetaChange(item, newMeta)
+                            }
+                          />
+                        ) : widget.type === 'net-worth-card' ? (
                           <NetWorthCard
                             widgetId={item.i}
                             isEditing={isEditing}
@@ -843,25 +865,6 @@ export function Overview({ dashboard }: OverviewProps) {
                             widgetId={item.i}
                             isEditing={isEditing}
                             accounts={accounts}
-                            meta={widget.meta}
-                            onMetaChange={newMeta =>
-                              onMetaChange(item, newMeta)
-                            }
-                          />
-                        ) : widget.type === 'plan-card' && planPageEnabled ? (
-                          <PlanCard
-                            widgetId={item.i}
-                            isEditing={isEditing}
-                            meta={widget.meta}
-                            onMetaChange={newMeta =>
-                              onMetaChange(item, newMeta)
-                            }
-                          />
-                        ) : widget.type === 'insights-card' &&
-                          insightsEnabled ? (
-                          <InsightsCard
-                            widgetId={item.i}
-                            isEditing={isEditing}
                             meta={widget.meta}
                             onMetaChange={newMeta =>
                               onMetaChange(item, newMeta)

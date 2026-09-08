@@ -17,6 +17,7 @@ const DEFAULT_FEATURE_FLAG_STATE: Record<FeatureFlag, boolean> = {
   akahuBankSync: false,
   mobileCalculator: false,
   monteCarloReport: false,
+  // Fork flags; see the note on FeatureFlag in loot-core types/prefs.ts.
   budgetTargets: false,
   spendingPace: false,
   planPage: false,

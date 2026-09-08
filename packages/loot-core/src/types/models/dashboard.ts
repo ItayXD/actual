@@ -1,7 +1,7 @@
 import type { ForecastSource } from './forecast';
+import type { InsightKind, InsightSeverity } from './insights';
 import type { CustomReportEntity } from './reports';
 import type { RuleConditionEntity } from './rule';
-import type { InsightKind, InsightSeverity } from './insights';
 
 export type DashboardPageEntity = {
   id: string;
@@ -344,6 +344,9 @@ export type InsightsWidget = AbstractWidget<
 >;
 
 type SpecializedWidget =
+  // Fork widgets first; upstream appends to the end of this union.
+  | PlanWidget
+  | InsightsWidget
   | NetWorthWidget
   | CashFlowWidget
   | SpendingWidget
@@ -356,9 +359,7 @@ type SpecializedWidget =
   | FormulaWidget
   | SankeyWidget
   | AgeOfMoneyWidget
-  | BalanceForecastWidget
-  | PlanWidget
-  | InsightsWidget;
+  | BalanceForecastWidget;
 export type DashboardWidgetEntity = SpecializedWidget | CustomReportWidget;
 export type NewDashboardWidgetEntity = Omit<
   DashboardWidgetEntity,

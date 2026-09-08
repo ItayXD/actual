@@ -13,6 +13,8 @@ export type FeatureFlag =
   | 'akahuBankSync'
   | 'mobileCalculator'
   | 'monteCarloReport'
+  // Fork flags. Measured: upstream inserts at BOTH ends of this union, so no
+  // position is safe — see FORK.md 'Where the conflicts actually come from'.
   | 'budgetTargets'
   | 'spendingPace'
   | 'planPage'
@@ -33,6 +35,8 @@ export type SyncedPrefs = Partial<
     | 'currencySymbolPosition'
     | 'currencySpaceBetweenAmountAndSymbol'
     | 'defaultCurrencyCode'
+    // Fork keys, namespaced so a vanilla client treats them as inert unknown
+    // keys (FORK.md rule 4).
     | 'plan.comparisonBasis'
     | 'fork.insights.dismissals'
     | `show-account-${string}-net-worth-chart`
