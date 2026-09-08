@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { makeContext, makeMonth } from './fixtures';
 import {
-  dayForSlot,
   expectedSpendToDate,
   paceRemainingThisMonth,
   projectCategory,
@@ -43,15 +42,6 @@ describe('slot mapping', () => {
     expect(slotForDay(1, 28)).toBe(1);
     expect(slotForDay(28, 28)).toBe(30);
     expect(slotForDay(31, 31)).toBe(30);
-  });
-
-  it('round-trips through dayForSlot at the edges', () => {
-    for (const daysInMonth of [28, 29, 30, 31]) {
-      expect(dayForSlot(slotForDay(1, daysInMonth), daysInMonth)).toBe(1);
-      expect(
-        dayForSlot(slotForDay(daysInMonth, daysInMonth), daysInMonth),
-      ).toBe(daysInMonth);
-    }
   });
 
   it('puts mid-month near the middle slot regardless of month length', () => {

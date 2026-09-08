@@ -1,3 +1,5 @@
+import type { InsightKind } from '#types/models/insights';
+
 /**
  * Every detection threshold, in one place.
  *
@@ -186,12 +188,12 @@ export const STALE_SCHEDULE = {
  * already happened, not something to act on, so it is capped below the
  * forward-looking detectors.
  */
-export const KIND_WEIGHT = {
+export const KIND_WEIGHT: Partial<Record<InsightKind, number>> = {
   'income-volatility': 0.7,
   'month-end-projection': 0.75,
   'data-quality': 0.7,
   'unusual-transaction': 0.75,
-} as const;
+};
 
 export const DEFAULTS = {
   HORIZON_DAYS: 90,

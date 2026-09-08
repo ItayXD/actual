@@ -36,15 +36,6 @@ export function slotForDay(day: number, daysInMonth: number): number {
   return Math.round(fraction * (PACE.SLOTS - 1)) + 1;
 }
 
-/** The inverse: which day of a month of this length sits at that slot. */
-export function dayForSlot(slot: number, daysInMonth: number): number {
-  if (daysInMonth <= 1) {
-    return 1;
-  }
-  const fraction = (slot - 1) / (PACE.SLOTS - 1);
-  return Math.round(fraction * (daysInMonth - 1)) + 1;
-}
-
 export type PaceExpectation = {
   /** What history says should have been spent by now. */
   expectedToDate: number;

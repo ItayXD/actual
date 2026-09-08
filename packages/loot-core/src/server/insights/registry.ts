@@ -105,7 +105,7 @@ export function runDetectors(
       unavailable[detector.kind] = produced.unavailable;
     }
 
-    const weight = KIND_WEIGHT[detector.kind as keyof typeof KIND_WEIGHT] ?? 1;
+    const weight = KIND_WEIGHT[detector.kind] ?? 1;
 
     for (const insight of list) {
       insights.push(
