@@ -442,7 +442,7 @@ async function getAverageMonths({
   return months;
 }
 
-function getAverageStartMonth(month: string): string {
+export function getAverageStartMonth(month: string): string {
   const prevMonth = monthUtils.prevMonth(month);
 
   if (prevMonth >= monthUtils.currentMonth()) {

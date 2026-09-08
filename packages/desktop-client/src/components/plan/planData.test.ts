@@ -2,7 +2,10 @@ import type {
   CategoryEntity,
   CategoryGroupEntity,
 } from '@actual-app/core/types/models';
-import type { CategoryTargetProjection } from '@actual-app/core/types/models/targets';
+import type {
+  CategoryTargetProjection,
+  PastSpending,
+} from '@actual-app/core/types/models/targets';
 
 import type { PlanMonthValues } from './planData';
 import { buildPlanData } from './planData';
@@ -29,7 +32,7 @@ function projection(
     goal: 10000,
     longGoal: false,
     perTemplate: [],
-    templateTypes: ['simple'],
+    templateTypes: ['periodic'],
     targetMonth: null,
     monthsRemaining: null,
     totalTargetAmount: null,
@@ -42,52 +45,100 @@ function projection(
 }
 
 function values(overrides: Partial<PlanMonthValues> = {}): PlanMonthValues {
-  return { income: 0, budgeted: {}, balance: {}, ...overrides };
+  return { budgeted: {}, balance: {}, ...overrides };
+}
+
+function past(overrides: Partial<PastSpending> = {}): PastSpending {
+  return {
+    basis: 'last-3-months',
+    income: 0,
+    byCategory: {},
+    ...overrides,
+  };
 }
 
 describe('buildPlanData', () => {
-  it('sums targets per group and overall', () => {
+  it('sums planned amounts per group and overall', () => {
     const data = buildPlanData(
       [projection('a', { goal: 10000 }), projection('b', { goal: 25000 })],
-      values({ income: 100000, budgeted: { a: 10000, b: 5000 } }),
+      values(),
+      past({ income: 100000 }),
       [group('g1', [cat('a'), cat('b')])],
     );
 
     expect(data.totalTarget).toBe(35000);
-    expect(data.totalAssigned).toBe(15000);
     expect(data.groups[0].target).toBe(35000);
-    expect(data.groups[0].assigned).toBe(15000);
   });
 
-  it('computes unplanned income as income minus the plan', () => {
+  it('sums past spending per group and overall', () => {
+    const data = buildPlanData(
+      [projection('a'), projection('b')],
+      values(),
+      past({ byCategory: { a: 12000, b: 3000 } }),
+      [group('g1', [cat('a'), cat('b')])],
+    );
+
+    expect(data.totalPastSpending).toBe(15000);
+    expect(data.groups[0].pastSpending).toBe(15000);
+  });
+
+  it('takes income from the comparison window, not the current month', () => {
     const data = buildPlanData(
       [projection('a', { goal: 30000 })],
-      values({ income: 100000 }),
+      values(),
+      past({ income: 100000 }),
       [group('g1', [cat('a')])],
     );
 
+    expect(data.income).toBe(100000);
     expect(data.unplanned).toBe(70000);
   });
 
   it('reports a negative unplanned figure when the plan overcommits income', () => {
     const data = buildPlanData(
       [projection('a', { goal: 150000 })],
-      values({ income: 100000 }),
+      values(),
+      past({ income: 100000 }),
       [group('g1', [cat('a')])],
     );
 
     expect(data.unplanned).toBe(-50000);
   });
 
-  it('excludes elastic categories from the monthly total', () => {
-    // "Whatever is left" would otherwise make the plan total depend on how
-    // much happened to be available.
+  it('compares each plan against its own history', () => {
+    const data = buildPlanData(
+      [projection('a', { goal: 10000 }), projection('b', { goal: 10000 })],
+      values(),
+      past({ byCategory: { a: 4000, b: 18000 } }),
+      [group('g1', [cat('a'), cat('b')])],
+    );
+
+    const [a, b] = data.groups[0].categories;
+    expect(a.vsPastSpending).toBe(6000); // plan leaves room
+    expect(b.vsPastSpending).toBe(-8000); // plan is below what it costs
+  });
+
+  it('has no comparison for a category with no plan', () => {
+    const data = buildPlanData(
+      [],
+      values(),
+      past({ byCategory: { a: 4000 } }),
+      [group('g1', [cat('a')])],
+    );
+
+    expect(data.groups[0].categories[0].target).toBe(null);
+    expect(data.groups[0].categories[0].vsPastSpending).toBe(null);
+    expect(data.groups[0].categories[0].pastSpending).toBe(4000);
+  });
+
+  it('excludes elastic categories from the planned total', () => {
     const data = buildPlanData(
       [
         projection('a', { goal: 10000 }),
         projection('b', { goal: null, isElastic: true }),
       ],
-      values({ income: 100000, budgeted: { b: 42000 } }),
+      values(),
+      past({ income: 100000 }),
       [group('g1', [cat('a'), cat('b')])],
     );
 
@@ -98,7 +149,8 @@ describe('buildPlanData', () => {
   it('skips the income group', () => {
     const data = buildPlanData(
       [projection('salary', { goal: 500000 })],
-      values({ income: 500000 }),
+      values(),
+      past(),
       [group('income', [cat('salary')], { is_income: true })],
     );
 
@@ -110,29 +162,33 @@ describe('buildPlanData', () => {
     const data = buildPlanData(
       [projection('a', { goal: 10000 }), projection('b', { goal: 90000 })],
       values(),
+      past(),
       [group('g1', [cat('a'), { ...cat('b'), hidden: true }])],
     );
 
     expect(data.totalTarget).toBe(10000);
   });
 
-  it('omits groups with nothing planned and nothing assigned', () => {
-    const data = buildPlanData([], values(), [
+  it('lists every group, so unplanned categories can be planned', () => {
+    // Unlike the budget table, an empty group is not noise here — it is where
+    // you go to start planning.
+    const data = buildPlanData([], values(), past(), [
       group('g1', [cat('a')]),
       group('g2', [cat('b')]),
     ]);
 
-    expect(data.groups).toEqual([]);
+    expect(data.groups.map(g => g.group.id)).toEqual(['g1', 'g2']);
   });
 
-  it('keeps a group that has assignments but no targets', () => {
-    const data = buildPlanData([], values({ budgeted: { a: 5000 } }), [
-      group('g1', [cat('a')]),
-    ]);
+  it('surfaces broken automations rather than hiding them', () => {
+    const data = buildPlanData(
+      [projection('a', { goal: null, error: 'Only one #goal is allowed' })],
+      values(),
+      past(),
+      [group('g1', [cat('a')])],
+    );
 
-    expect(data.groups).toHaveLength(1);
-    expect(data.groups[0].target).toBe(0);
-    expect(data.groups[0].assigned).toBe(5000);
+    expect(data.errors.map(c => c.category.id)).toEqual(['a']);
   });
 
   it('partitions long-term goals by #goal or a future deadline', () => {
@@ -144,21 +200,11 @@ describe('buildPlanData', () => {
         projection('d'),
       ],
       values(),
+      past(),
       [group('g1', [cat('a'), cat('b'), cat('c'), cat('d')])],
     );
 
     // 'c' is due this month, so it is a monthly line, not a long-term goal.
     expect(data.longTerm.map(c => c.category.id)).toEqual(['a', 'b']);
-  });
-
-  it('surfaces broken automations rather than hiding them', () => {
-    const data = buildPlanData(
-      [projection('a', { goal: null, error: 'Only one #goal is allowed' })],
-      values({ budgeted: { a: 100 } }),
-      [group('g1', [cat('a')])],
-    );
-
-    expect(data.errors.map(c => c.category.id)).toEqual(['a']);
-    expect(data.errors[0].error).toMatch(/Only one #goal/);
   });
 });

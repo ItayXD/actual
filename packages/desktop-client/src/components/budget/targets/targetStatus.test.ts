@@ -1,5 +1,7 @@
 import type { TargetStatus, TargetStatusInput } from './targetStatus';
 import {
+  getPlanProgress,
+  getPlanStatus,
   getTargetProgress,
   getTargetStatus,
   makeTargetAmountStyle,
@@ -224,5 +226,50 @@ describe('makeTargetAmountStyle', () => {
     for (const status of statuses) {
       expect(makeTargetAmountStyle(status)).toHaveProperty('color');
     }
+  });
+});
+
+describe('getPlanStatus', () => {
+  it("reports how this month's assignment compares to the plan", () => {
+    expect(getPlanStatus(0, 10000)).toBe('unfunded');
+    expect(getPlanStatus(4000, 10000)).toBe('partial');
+    expect(getPlanStatus(10000, 10000)).toBe('funded');
+    expect(getPlanStatus(12000, 10000)).toBe('overfunded');
+  });
+
+  it('has no opinion without a fixed plan', () => {
+    expect(getPlanStatus(5000, null)).toBe('no-target');
+    expect(getPlanStatus(5000, 10000, true)).toBe('elastic');
+  });
+
+  it('treats a zero plan as met', () => {
+    expect(getPlanStatus(0, 0)).toBe('funded');
+    expect(getPlanStatus(100, 0)).toBe('overfunded');
+  });
+
+  it('ignores the balance, which the Balance column owns', () => {
+    // Same assignment and plan, whatever the balance is doing.
+    expect(getPlanStatus(10000, 10000)).toBe('funded');
+  });
+});
+
+describe('getPlanProgress', () => {
+  it('is the assigned fraction of the plan', () => {
+    expect(getPlanProgress(2500, 10000)).toBe(0.25);
+    expect(getPlanProgress(10000, 10000)).toBe(1);
+  });
+
+  it('can exceed 1 when over-assigned', () => {
+    expect(getPlanProgress(15000, 10000)).toBe(1.5);
+  });
+
+  it('never goes negative', () => {
+    expect(getPlanProgress(-5000, 10000)).toBe(0);
+  });
+
+  it('is null when there is nothing to measure against', () => {
+    expect(getPlanProgress(5000, null)).toBe(null);
+    expect(getPlanProgress(5000, 0)).toBe(null);
+    expect(getPlanProgress(5000, 10000, true)).toBe(null);
   });
 });

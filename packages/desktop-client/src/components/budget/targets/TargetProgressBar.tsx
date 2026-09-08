@@ -16,6 +16,8 @@ type TargetProgressBarProps = {
   'aria-label': string;
   /** Spoken value, e.g. "$40 of $100 assigned". */
   valueText: string;
+  /** Native hover tooltip, so the status is also available as words. */
+  title?: string;
 };
 
 function clampFraction(value: number) {
@@ -41,6 +43,7 @@ export function TargetProgressBar({
   style,
   'aria-label': ariaLabel,
   valueText,
+  title,
 }: TargetProgressBarProps) {
   const filled = clampFraction(progress);
 
@@ -52,6 +55,7 @@ export function TargetProgressBar({
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuetext={valueText}
+      title={title}
       style={{
         height,
         flexShrink: 0,

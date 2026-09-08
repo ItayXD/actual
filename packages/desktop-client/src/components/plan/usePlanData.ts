@@ -1,5 +1,9 @@
 import { send } from '@actual-app/core/platform/client/connection';
 import * as monthUtils from '@actual-app/core/shared/months';
+import type {
+  PastSpending,
+  SpendingBasis,
+} from '@actual-app/core/types/models/targets';
 import { useQuery } from '@tanstack/react-query';
 
 import { budgetTargetQueries } from '#components/budget/targets/queries';
@@ -25,28 +29,31 @@ function parseMonthValues(cells: MonthCell[], month: string): PlanMonthValues {
   const prefix = `${monthUtils.sheetForMonth(month)}!`;
   const budgeted: Record<string, number> = {};
   const balance: Record<string, number> = {};
-  let income = 0;
 
   for (const cell of cells) {
     const name = cell.name.startsWith(prefix)
       ? cell.name.slice(prefix.length)
       : cell.name;
 
-    if (name === 'total-income') {
-      income = toNumber(cell.value);
-    } else if (name.startsWith('budget-')) {
+    if (name.startsWith('budget-')) {
       budgeted[name.slice('budget-'.length)] = toNumber(cell.value);
     } else if (name.startsWith('leftover-')) {
       balance[name.slice('leftover-'.length)] = toNumber(cell.value);
     }
   }
 
-  return { income, budgeted, balance };
+  return { budgeted, balance };
 }
 
 export const planQueries = {
+  all: () => ['plan'],
   monthValues: (month: string, isTracking: boolean) => ({
-    queryKey: ['plan', 'month-values', month, isTracking] as const,
+    queryKey: [
+      ...planQueries.all(),
+      'month-values',
+      month,
+      isTracking,
+    ] as const,
     queryFn: async (): Promise<PlanMonthValues> => {
       const cells = (await send(
         isTracking ? 'tracking-budget-month' : 'envelope-budget-month',
@@ -55,12 +62,17 @@ export const planQueries = {
       return parseMonthValues(cells, month);
     },
   }),
+  pastSpending: (month: string, basis: SpendingBasis) => ({
+    queryKey: [...planQueries.all(), 'past-spending', month, basis] as const,
+    queryFn: async (): Promise<PastSpending> =>
+      await send('budget/past-spending', { month, basis }),
+  }),
 };
 
-export function usePlanData(month: string): {
-  data: PlanData | null;
-  isLoading: boolean;
-} {
+export function usePlanData(
+  month: string,
+  basis: SpendingBasis,
+): { data: PlanData | null; isLoading: boolean } {
   const [budgetType = 'envelope'] = useSyncedPref('budgetType');
   const isTracking = budgetType === 'tracking';
 
@@ -70,16 +82,19 @@ export function usePlanData(month: string): {
   const { data: values, isLoading: valuesLoading } = useQuery(
     planQueries.monthValues(month, isTracking),
   );
+  const { data: past, isLoading: pastLoading } = useQuery(
+    planQueries.pastSpending(month, basis),
+  );
   const { data: { grouped: categoryGroups } = { grouped: [] } } =
     useCategories();
 
-  const isLoading = projectionsLoading || valuesLoading;
-  if (!projections || !values) {
+  const isLoading = projectionsLoading || valuesLoading || pastLoading;
+  if (!projections || !values || !past) {
     return { data: null, isLoading };
   }
 
   return {
-    data: buildPlanData(projections.categories, values, categoryGroups),
+    data: buildPlanData(projections.categories, values, past, categoryGroups),
     isLoading,
   };
 }

@@ -7,7 +7,7 @@ import { envelopeBudget } from '#spreadsheet/bindings';
 
 import { budgetTargetQueries } from './queries';
 import type { TargetStatus } from './targetStatus';
-import { getTargetProgress, getTargetStatus } from './targetStatus';
+import { getPlanProgress, getPlanStatus } from './targetStatus';
 import { useBudgetTargetsEnabled } from './useBudgetTargetsEnabled';
 
 /**
@@ -25,13 +25,14 @@ function useBudgetSheetValue<FieldName extends SheetFields<'envelope-budget'>>(
 }
 
 export type CategoryTarget = {
+  /** How this month's assignment compares to the plan. */
   status: TargetStatus;
-  /** Amount to fund this month, in minor units. */
+  /** Amount the plan asks for this month, in minor units. */
   target: number | null;
-  /** Amount counted as funded — budgeted, or the balance for a long goal. */
-  funded: number;
+  /** Amount assigned this month, in minor units. */
+  assigned: number;
+  /** Assigned as a fraction of the plan; null when there is no fixed plan. */
   progress: number | null;
-  pace: number | null;
   isLongGoal: boolean;
   isElastic: boolean;
   targetMonth: string | null;
@@ -76,8 +77,6 @@ export function useCategoryTarget(
   // budget type, and a union of the two would not typecheck under strict mode.
   const budgeted =
     useBudgetSheetValue(envelopeBudget.catBudgeted(category.id)) ?? 0;
-  const balance =
-    useBudgetSheetValue(envelopeBudget.catBalance(category.id)) ?? 0;
   const persistedGoal = useBudgetSheetValue(
     envelopeBudget.catGoal(category.id),
   );
@@ -112,29 +111,15 @@ export function useCategoryTarget(
   const monthsRemaining = usePersisted
     ? null
     : (projection.monthsRemaining ?? null);
-  const totalTargetAmount = usePersisted
-    ? null
-    : (projection.totalTargetAmount ?? null);
 
-  const statusInput = {
-    balance,
-    budgeted,
-    target,
-    isLongGoal,
-    isElastic,
-    monthsRemaining,
-    savedTowardTarget: usePersisted ? 0 : projection.savedTowardTarget,
-    totalTargetAmount,
-  };
-
-  const { progress, pace } = getTargetProgress(statusInput);
-
+  // The budget table judges the Budgeted column only: assigned vs this month's
+  // plan. Overspending is shown in the Balance column and pacing toward a
+  // deadline on the Plan page, so neither is folded in here.
   return {
-    status: getTargetStatus(statusInput),
+    status: getPlanStatus(budgeted, target, isElastic),
     target,
-    funded: isLongGoal ? balance : budgeted,
-    progress,
-    pace,
+    assigned: budgeted,
+    progress: getPlanProgress(budgeted, target, isElastic),
     isLongGoal,
     isElastic,
     targetMonth: usePersisted ? null : (projection.targetMonth ?? null),

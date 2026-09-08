@@ -18,6 +18,7 @@ import * as cleanupGroupActions from './cleanup-groups';
 import * as cleanupActions from './cleanup-template';
 import { storeNoteCleanups } from './cleanup-template-notes';
 import * as goalActions from './goal-template';
+import { getPastSpending } from './past-spending';
 import { sortCategories } from './sort-categories';
 import * as goalNoteActions from './template-notes';
 
@@ -64,6 +65,7 @@ export type BudgetHandlers = {
   'budget/set-category-automations': typeof goalActions.storeTemplates;
   'budget/dry-run-category-template': typeof goalActions.dryRunCategoryTemplate;
   'budget/project-targets': typeof goalActions.projectTargets;
+  'budget/past-spending': typeof getPastSpending;
   'budget/store-note-templates': typeof goalNoteActions.storeNoteTemplates;
   'budget/store-note-cleanups': typeof storeNoteCleanups;
   'budget/render-note-templates': typeof goalNoteActions.unparse;
@@ -174,6 +176,8 @@ app.method(
 // Read-only: deliberately not wrapped in mutator/undoable. Projecting targets
 // must never write a budget, a goal, or a sync message.
 app.method('budget/project-targets', goalActions.projectTargets);
+// Also read-only: reads cached sheet values, writes nothing.
+app.method('budget/past-spending', getPastSpending);
 app.method(
   'budget/store-note-templates',
   mutator(goalNoteActions.storeNoteTemplates),

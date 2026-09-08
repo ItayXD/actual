@@ -2,15 +2,29 @@ import type {
   CategoryEntity,
   CategoryGroupEntity,
 } from '@actual-app/core/types/models';
-import type { CategoryTargetProjection } from '@actual-app/core/types/models/targets';
+import type {
+  CategoryTargetProjection,
+  PastSpending,
+} from '@actual-app/core/types/models/targets';
 
 export type PlanCategory = {
   category: CategoryEntity;
   /** What the automations want assigned this month, in minor units. */
   target: number | null;
-  /** What is actually assigned this month. */
+  /**
+   * What is actually assigned this month. Not shown as a column — the plan
+   * screen compares the plan against history — but the long-term goal bars
+   * need it to show where they will stand at month end.
+   */
   assigned: number;
   balance: number;
+  /** Average monthly spend over the chosen window, positive for an expense. */
+  pastSpending: number;
+  /**
+   * Plan minus history. Positive means the plan allows more than has been
+   * spent; negative means the plan is below what this category usually costs.
+   */
+  vsPastSpending: number | null;
   isLongGoal: boolean;
   isElastic: boolean;
   targetMonth: string | null;
@@ -25,16 +39,17 @@ export type PlanGroup = {
   categories: PlanCategory[];
   /** Sum of fixed targets in this group; elastic categories contribute 0. */
   target: number;
-  assigned: number;
+  pastSpending: number;
 };
 
 export type PlanData = {
   groups: PlanGroup[];
-  /** Income received this month. */
+  /** Average monthly income over the chosen window. */
   income: number;
   /** Everything the plan asks for this month, across all groups. */
   totalTarget: number;
-  totalAssigned: number;
+  /** Average monthly spend over the chosen window, across all groups. */
+  totalPastSpending: number;
   /** Income minus what the plan asks for. Negative means the plan overcommits. */
   unplanned: number;
   /** Categories still saving toward a dated or long-term goal. */
@@ -46,7 +61,6 @@ export type PlanData = {
 };
 
 export type PlanMonthValues = {
-  income: number;
   /** Per-category assigned amount, in minor units. */
   budgeted: Record<CategoryEntity['id'], number>;
   /** Per-category balance, in minor units. */
@@ -63,6 +77,7 @@ export type PlanMonthValues = {
 export function buildPlanData(
   projections: CategoryTargetProjection[],
   values: PlanMonthValues,
+  past: PastSpending,
   categoryGroups: CategoryGroupEntity[],
 ): PlanData {
   const byCategory = new Map(projections.map(p => [p.categoryId, p]));
@@ -84,11 +99,15 @@ export function buildPlanData(
       }
 
       const projection = byCategory.get(category.id);
+      const target = projection?.goal ?? null;
+      const pastSpending = past.byCategory[category.id] ?? 0;
       const planCategory: PlanCategory = {
         category,
-        target: projection?.goal ?? null,
+        target,
         assigned: values.budgeted[category.id] ?? 0,
         balance: values.balance[category.id] ?? 0,
+        pastSpending,
+        vsPastSpending: target === null ? null : target - pastSpending,
         isLongGoal: projection?.longGoal ?? false,
         isElastic: projection?.isElastic ?? false,
         targetMonth: projection?.targetMonth ?? null,
@@ -115,27 +134,25 @@ export function buildPlanData(
       }
     }
 
-    // A group with nothing planned and nothing assigned is noise on a page
-    // about the plan.
-    if (categories.some(c => c.target !== null || c.assigned !== 0)) {
-      groups.push({
-        group,
-        categories,
-        target: sumTargets(categories),
-        assigned: categories.reduce((sum, c) => sum + c.assigned, 0),
-      });
-    }
+    // Every non-income group is listed, because the plan screen is also where
+    // categories get planned for the first time.
+    groups.push({
+      group,
+      categories,
+      target: sumTargets(categories),
+      pastSpending: categories.reduce((sum, c) => sum + c.pastSpending, 0),
+    });
   }
 
   const totalTarget = groups.reduce((sum, g) => sum + g.target, 0);
-  const totalAssigned = groups.reduce((sum, g) => sum + g.assigned, 0);
+  const totalPastSpending = groups.reduce((sum, g) => sum + g.pastSpending, 0);
 
   return {
     groups,
-    income: values.income,
+    income: past.income,
     totalTarget,
-    totalAssigned,
-    unplanned: values.income - totalTarget,
+    totalPastSpending,
+    unplanned: past.income - totalTarget,
     longTerm,
     elastic,
     errors,

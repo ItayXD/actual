@@ -1,16 +1,29 @@
-import { Trans } from 'react-i18next';
+import { useState } from 'react';
+import { Trans, useTranslation } from 'react-i18next';
 
+import { Button } from '@actual-app/components/button';
+import { SvgAdd } from '@actual-app/components/icons/v1';
+import { Input } from '@actual-app/components/input';
 import { styles } from '@actual-app/components/styles';
 import { Text } from '@actual-app/components/text';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
+import type { CategoryEntity } from '@actual-app/core/types/models';
 
+import { useCreateCategoryMutation } from '#budget';
 import { FinancialText } from '#components/FinancialText';
 import { PrivacyFilter } from '#components/PrivacyFilter';
 import { useFormat } from '#hooks/useFormat';
 
 import { PLAN_COLUMN_WIDTH, PlanCategoryRow } from './PlanCategoryRow';
 import type { PlanGroup } from './planData';
+
+const columnHeaderStyle = {
+  width: PLAN_COLUMN_WIDTH,
+  flexShrink: 0,
+  textAlign: 'right',
+  color: theme.pageTextSubdued,
+} as const;
 
 function ColumnHeaders() {
   return (
@@ -29,26 +42,12 @@ function ColumnHeaders() {
           <Trans>Category</Trans>
         </Text>
       </View>
-      <View style={{ width: 190, flexShrink: 0 }} />
-      <Text
-        style={{
-          ...styles.smallText,
-          color: theme.pageTextSubdued,
-          width: PLAN_COLUMN_WIDTH,
-          textAlign: 'right',
-        }}
-      >
+      <View style={{ width: 150, flexShrink: 0 }} />
+      <Text style={{ ...styles.smallText, ...columnHeaderStyle }}>
         <Trans>Planned</Trans>
       </Text>
-      <Text
-        style={{
-          ...styles.smallText,
-          color: theme.pageTextSubdued,
-          width: PLAN_COLUMN_WIDTH,
-          textAlign: 'right',
-        }}
-      >
-        <Trans>Assigned</Trans>
+      <Text style={{ ...styles.smallText, ...columnHeaderStyle }}>
+        <Trans>Past expenses</Trans>
       </Text>
     </View>
   );
@@ -63,19 +62,19 @@ function GroupHeader({ item }: { item: PlanGroup }) {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
-        padding: '10px 0 6px',
+        padding: '12px 0 6px',
       }}
     >
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={{ fontWeight: 600 }}>{item.group.name}</Text>
       </View>
-      <View style={{ width: 190, flexShrink: 0 }} />
+      <View style={{ width: 150, flexShrink: 0 }} />
       <PrivacyFilter>
         <FinancialText
           style={{
-            width: PLAN_COLUMN_WIDTH,
-            textAlign: 'right',
+            ...columnHeaderStyle,
             fontWeight: 600,
+            color: theme.pageText,
           }}
         >
           {format(item.target, 'financial')}
@@ -84,32 +83,79 @@ function GroupHeader({ item }: { item: PlanGroup }) {
       <PrivacyFilter>
         <FinancialText
           style={{
-            width: PLAN_COLUMN_WIDTH,
-            textAlign: 'right',
+            ...columnHeaderStyle,
             fontWeight: 600,
+            color: theme.pageText,
           }}
         >
-          {format(item.assigned, 'financial')}
+          {format(item.pastSpending, 'financial')}
         </FinancialText>
       </PrivacyFilter>
     </View>
   );
 }
 
-export function PlanGroupList({ groups }: { groups: PlanGroup[] }) {
-  if (groups.length === 0) {
+/**
+ * Adds a category to this group without leaving the plan. New categories start
+ * with no plan, so they show up immediately as something to plan for.
+ */
+function AddCategoryRow({ groupId }: { groupId: string }) {
+  const { t } = useTranslation();
+  const [adding, setAdding] = useState(false);
+  const createCategory = useCreateCategoryMutation();
+
+  if (!adding) {
     return (
-      <View style={{ padding: '24px 0' }}>
-        <Text style={{ color: theme.pageTextSubdued }}>
-          <Trans>
-            No budget automations yet. Add one to a category and its target will
-            show up here.
-          </Trans>
+      <Button
+        variant="bare"
+        onPress={() => setAdding(true)}
+        style={{
+          alignSelf: 'flex-start',
+          gap: 4,
+          marginTop: 2,
+          color: theme.pageTextSubdued,
+        }}
+      >
+        <SvgAdd width={8} height={8} />
+        <Text style={styles.smallText}>
+          <Trans>Add category</Trans>
         </Text>
-      </View>
+      </Button>
     );
   }
 
+  return (
+    <View style={{ padding: '4px 0', maxWidth: 260 }}>
+      <Input
+        autoFocus
+        placeholder={t('Category name')}
+        aria-label={t('New category name')}
+        onEnter={value => {
+          const name = value.trim();
+          if (name) {
+            createCategory.mutate({
+              name,
+              groupId,
+              isIncome: false,
+              isHidden: false,
+            });
+          }
+          setAdding(false);
+        }}
+        onEscape={() => setAdding(false)}
+        onBlur={() => setAdding(false)}
+      />
+    </View>
+  );
+}
+
+export function PlanGroupList({
+  groups,
+  onEditAutomations,
+}: {
+  groups: PlanGroup[];
+  onEditAutomations: (categoryId: CategoryEntity['id']) => void;
+}) {
   return (
     <View>
       <ColumnHeaders />
@@ -117,8 +163,13 @@ export function PlanGroupList({ groups }: { groups: PlanGroup[] }) {
         <View key={group.group.id}>
           <GroupHeader item={group} />
           {group.categories.map(item => (
-            <PlanCategoryRow key={item.category.id} item={item} />
+            <PlanCategoryRow
+              key={item.category.id}
+              item={item}
+              onEditAutomations={() => onEditAutomations(item.category.id)}
+            />
           ))}
+          <AddCategoryRow groupId={group.group.id} />
         </View>
       ))}
     </View>

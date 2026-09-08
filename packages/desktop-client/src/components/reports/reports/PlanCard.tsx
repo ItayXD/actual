@@ -62,7 +62,9 @@ export function PlanCard({
   const { t } = useTranslation();
   const [nameMenuOpen, setNameMenuOpen] = useState(false);
   const month = meta?.month || monthUtils.currentMonth();
-  const { data } = usePlanData(month);
+  // The card always compares against a 3-month average; the Plan page owns the
+  // window selector.
+  const { data } = usePlanData(month, 'last-3-months');
 
   const income = data?.income ?? 0;
   const planned = data?.totalTarget ?? 0;

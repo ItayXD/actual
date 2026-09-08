@@ -368,7 +368,14 @@ export function FinancesApp() {
                       }
                     />
                     <Route path="/tags" element={<ManageTagsPage />} />
-                    <Route path="/plan" element={<PlanRoute />} />
+                    <Route
+                      path="/plan"
+                      element={
+                        <NarrowNotSupported>
+                          <PlanRoute />
+                        </NarrowNotSupported>
+                      }
+                    />
                     <Route
                       path="/notifications"
                       element={<NotificationsPage />}
@@ -483,7 +490,6 @@ export function FinancesApp() {
                   <Route path="/rules" element={<MobileNavTabs />} />
                   <Route path="/payees" element={<MobileNavTabs />} />
                   <Route path="/schedules" element={<MobileNavTabs />} />
-                  <Route path="/plan" element={<MobileNavTabs />} />
                   <Route path="*" element={null} />
                 </Routes>
               </MobilePageHeaderProvider>

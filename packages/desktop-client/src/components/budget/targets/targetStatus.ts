@@ -99,6 +99,49 @@ export function getTargetStatus(input: TargetStatusInput): TargetStatus {
   return funded > 0 ? 'partial' : 'unfunded';
 }
 
+/**
+ * Status of what is assigned this month against what the plan asks for.
+ *
+ * Deliberately narrower than `getTargetStatus`: the budget table's Budgeted
+ * column answers only "is this month's assignment at plan". Overspending is a
+ * balance concept and is shown in the Balance column, and pacing toward a
+ * deadline is shown on the Plan page — neither belongs here.
+ */
+export function getPlanStatus(
+  assigned: number,
+  target: number | null,
+  isElastic: boolean = false,
+): TargetStatus {
+  if (isElastic) {
+    return 'elastic';
+  }
+  if (target === null) {
+    return 'no-target';
+  }
+  if (assigned > target) {
+    return 'overfunded';
+  }
+  if (assigned === target) {
+    return 'funded';
+  }
+  return assigned > 0 ? 'partial' : 'unfunded';
+}
+
+/**
+ * Fraction of this month's plan that is assigned, or null when there is no
+ * fixed number to measure against. May exceed 1.
+ */
+export function getPlanProgress(
+  assigned: number,
+  target: number | null,
+  isElastic: boolean = false,
+): number | null {
+  if (target === null || isElastic || target <= 0) {
+    return null;
+  }
+  return Math.max(0, assigned / target);
+}
+
 export type TargetProgress = {
   /**
    * Fraction of the target reached, 0..1+ (may exceed 1 when overfunded), or

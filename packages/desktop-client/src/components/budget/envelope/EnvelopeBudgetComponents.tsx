@@ -18,6 +18,7 @@ import { css } from '@emotion/css';
 
 import { BalanceWithCarryover } from '#components/budget/BalanceWithCarryover';
 import { TargetProgressBar } from '#components/budget/targets/TargetProgressBar';
+import { makeTargetAmountStyle } from '#components/budget/targets/targetStatus';
 import { useCategoryTarget } from '#components/budget/targets/useCategoryTarget';
 import { makeAmountGrey } from '#components/budget/util';
 import { NotesButton } from '#components/NotesButton';
@@ -205,6 +206,12 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
   const { t } = useTranslation();
   const format = useFormat();
   const target = useCategoryTarget(category, month);
+  const planSummary = target
+    ? t('{{assigned}} of {{planned}} planned', {
+        assigned: format(target.assigned, 'financial'),
+        planned: format(target.target ?? 0, 'financial'),
+      })
+    : '';
 
   const budgetMenuTriggerRef = useRef(null);
   const balanceMenuTriggerRef = useRef(null);
@@ -416,7 +423,9 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
           valueProps={{
             binding: envelopeBudget.catBudgeted(category.id),
             type: 'financial',
-            getValueStyle: makeAmountGrey,
+            getValueStyle: value =>
+              (target ? makeTargetAmountStyle(target.status) : null) ??
+              makeAmountGrey(value),
             formatExpr: format.forEdit,
             unformatExpr: format.fromEdit,
           }}
@@ -435,6 +444,27 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
             });
           }}
         />
+
+        {/*
+          Absolutely positioned against this row view rather than placed in the
+          flow, so the 32px row height is untouched and the editable cell keeps
+          its own layout.
+        */}
+        {!editing && target && target.progress !== null && (
+          <TargetProgressBar
+            progress={target.progress}
+            status={target.status}
+            aria-label={t('Assigned against plan')}
+            valueText={planSummary}
+            title={planSummary}
+            style={{
+              position: 'absolute',
+              left: 4,
+              right: 5,
+              bottom: 1,
+            }}
+          />
+        )}
       </View>
       <Field name="spent" width="flex" style={{ textAlign: 'right' }}>
         <View
@@ -496,10 +526,6 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
         ref={balanceMenuTriggerRef}
         name="balance"
         width="flex"
-        // Truncation is already handled on the number itself; disabling the
-        // Field's wrapper lets the progress bar sit below it in the column
-        // rather than inside the number's 16px-tall, clipped row.
-        truncate={false}
         style={{ paddingRight: styles.monthRightPadding, textAlign: 'right' }}
       >
         <Button
@@ -530,24 +556,9 @@ export const ExpenseCategoryMonth = memo(function ExpenseCategoryMonth({
             goal={envelopeBudget.catGoal(category.id)}
             budgeted={envelopeBudget.catBudgeted(category.id)}
             longGoal={envelopeBudget.catLongGoal(category.id)}
-            target={target}
             tooltipDisabled={balanceMenuOpen}
           />
         </Button>
-
-        {target && target.progress !== null && (
-          <TargetProgressBar
-            progress={target.progress}
-            pace={target.pace}
-            status={target.status}
-            aria-label={t('Target progress')}
-            valueText={t('{{funded}} of {{target}}', {
-              funded: format(target.funded, 'financial'),
-              target: format(target.target ?? 0, 'financial'),
-            })}
-            style={{ marginTop: 2 }}
-          />
-        )}
 
         <Popover
           triggerRef={balanceMenuTriggerRef}

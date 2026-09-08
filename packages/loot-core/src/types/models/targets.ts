@@ -52,3 +52,25 @@ export type MonthTargetProjection = {
   month: string;
   categories: CategoryTargetProjection[];
 };
+
+/**
+ * Window used to summarise what a category actually cost, and what income
+ * actually was, so a plan can be compared against history rather than against
+ * a single month's noise.
+ */
+export type SpendingBasis =
+  | 'last-month'
+  | 'last-3-months'
+  | 'year-to-date'
+  | 'all-time';
+
+export type PastSpending = {
+  basis: SpendingBasis;
+  /** Average income per month over the window, in minor units. */
+  income: number;
+  /**
+   * Average spend per month per category over the window, in minor units and
+   * signed positive for an expense.
+   */
+  byCategory: Record<CategoryEntity['id'], number>;
+};

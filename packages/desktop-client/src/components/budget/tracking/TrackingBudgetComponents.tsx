@@ -19,6 +19,8 @@ import { css } from '@emotion/css';
 import { t } from 'i18next';
 
 import { BalanceWithCarryover } from '#components/budget/BalanceWithCarryover';
+import { TargetProgressBar } from '#components/budget/targets/TargetProgressBar';
+import { makeTargetAmountStyle } from '#components/budget/targets/targetStatus';
 import { useCategoryTarget } from '#components/budget/targets/useCategoryTarget';
 import { makeAmountGrey } from '#components/budget/util';
 import { NotesButton } from '#components/NotesButton';
@@ -204,6 +206,12 @@ export const CategoryMonth = memo(function CategoryMonth({
   const triggerRef = useRef(null);
   const format = useFormat();
   const target = useCategoryTarget(category, month);
+  const planSummary = target
+    ? t('{{assigned}} of {{planned}} planned', {
+        assigned: format(target.assigned, 'financial'),
+        planned: format(target.target ?? 0, 'financial'),
+      })
+    : '';
 
   const [balanceMenuOpen, setBalanceMenuOpen] = useState(false);
   const triggerBalanceMenuRef = useRef(null);
@@ -380,7 +388,9 @@ export const CategoryMonth = memo(function CategoryMonth({
           valueProps={{
             binding: trackingBudget.catBudgeted(category.id),
             type: 'financial',
-            getValueStyle: makeAmountGrey,
+            getValueStyle: value =>
+              (target ? makeTargetAmountStyle(target.status) : null) ??
+              makeAmountGrey(value),
             formatExpr: format.forEdit,
             unformatExpr: format.fromEdit,
           }}
@@ -399,6 +409,23 @@ export const CategoryMonth = memo(function CategoryMonth({
             });
           }}
         />
+
+        {/* Positioned against this row view so the row height is untouched. */}
+        {!editing && target && target.progress !== null && (
+          <TargetProgressBar
+            progress={target.progress}
+            status={target.status}
+            aria-label={t('Assigned against plan')}
+            valueText={planSummary}
+            title={planSummary}
+            style={{
+              position: 'absolute',
+              left: 4,
+              right: 5,
+              bottom: 1,
+            }}
+          />
+        )}
       </View>
       <Field name="spent" width="flex" style={{ textAlign: 'right' }}>
         <View
@@ -483,7 +510,6 @@ export const CategoryMonth = memo(function CategoryMonth({
               goal={trackingBudget.catGoal(category.id)}
               budgeted={trackingBudget.catBudgeted(category.id)}
               longGoal={trackingBudget.catLongGoal(category.id)}
-              target={target}
             />
           </Button>
 

@@ -11,11 +11,15 @@ import { Text } from '@actual-app/components/text';
 import { theme } from '@actual-app/components/theme';
 import { View } from '@actual-app/components/view';
 import * as monthUtils from '@actual-app/core/shared/months';
+import type { SpendingBasis } from '@actual-app/core/types/models/targets';
 
 import { formatMonthLabel } from '#components/budget/goals/formatMonthLabel';
 import { useBudgetTargetInvalidation } from '#components/budget/targets/useBudgetTargetInvalidation';
 import { Page } from '#components/Page';
 import { useLocale } from '#hooks/useLocale';
+import { useSyncedPref } from '#hooks/useSyncedPref';
+import { pushModal } from '#modals/modalsSlice';
+import { useDispatch } from '#redux';
 
 import { PlanGroupList } from './PlanGroupList';
 import { PlanLongTermGoals } from './PlanLongTermGoals';
@@ -61,10 +65,23 @@ function MonthSelector({
  */
 export function PlanPage() {
   const { t } = useTranslation();
+  const dispatch = useDispatch();
   const [month, setMonth] = useState(() => monthUtils.currentMonth());
-  const { data, isLoading } = usePlanData(month);
+  const [basis, setBasis] = useSyncedPref('plan.comparisonBasis');
+  const comparisonBasis = (basis as SpendingBasis) || 'last-3-months';
+  const { data, isLoading } = usePlanData(month, comparisonBasis);
 
   useBudgetTargetInvalidation();
+
+  const onEditAutomations = (categoryId: string) =>
+    dispatch(
+      pushModal({
+        modal: {
+          name: 'category-automations-edit',
+          options: { categoryId, month },
+        },
+      }),
+    );
 
   return (
     <Page header={t('Plan')}>
@@ -73,7 +90,11 @@ export function PlanPage() {
 
         {data ? (
           <>
-            <PlanSummary data={data} />
+            <PlanSummary
+              data={data}
+              basis={comparisonBasis}
+              onBasisChange={setBasis}
+            />
 
             {data.errors.length > 0 && (
               <View
@@ -94,7 +115,10 @@ export function PlanPage() {
               </View>
             )}
 
-            <PlanGroupList groups={data.groups} />
+            <PlanGroupList
+              groups={data.groups}
+              onEditAutomations={onEditAutomations}
+            />
             <PlanLongTermGoals goals={data.longTerm} />
           </>
         ) : (
