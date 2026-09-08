@@ -82,6 +82,7 @@ import {
 } from '#components/mobile/MobileForms';
 import { getPrettyPayee } from '#components/mobile/utils';
 import { MobilePageHeader, Page } from '#components/Page';
+import { AmazonLookupButton } from '#components/transactions/amazon/AmazonLookupButton';
 import { shouldApplyRuleChange } from '#components/transactions/table/utils';
 import { useAccounts } from '#hooks/useAccounts';
 import { useCategories } from '#hooks/useCategories';
@@ -542,6 +543,15 @@ const ChildTransactionEdit = forwardRef<
             onPress={() => onEditField(transaction.id, 'category')}
             data-testid={`category-field-${transaction.id}`}
           />
+
+          {!transaction.category &&
+            !isOffBudget &&
+            !isBudgetTransfer(transaction) && (
+              <AmazonLookupButton
+                payeeName={getPayee(transaction)?.name}
+                importedPayeeName={transaction.imported_payee}
+              />
+            )}
         </View>
 
         <View>
@@ -1351,6 +1361,15 @@ const TransactionEditInner = memo<TransactionEditInnerProps>(
                 onPress={() => onEditFieldInner(transaction.id, 'category')}
                 data-testid="category-field"
               />
+
+              {!transaction.category &&
+                !isOffBudget &&
+                !isBudgetTransfer(transaction) && (
+                  <AmazonLookupButton
+                    payeeName={getPayee(transaction)?.name}
+                    importedPayeeName={transaction.imported_payee}
+                  />
+                )}
             </View>
           )}
 

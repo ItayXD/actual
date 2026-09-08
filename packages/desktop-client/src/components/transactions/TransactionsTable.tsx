@@ -147,6 +147,8 @@ import {
   isFutureTransaction,
 } from '#util/schedule-actions';
 
+import { isAmazonPayee } from './amazon/amazonLookup';
+import { AmazonLookupIconButton } from './amazon/AmazonLookupIconButton';
 import {
   isTransactionTableColumnAvailableInChildRows,
   isTransactionTableColumnDisplayOnly,
@@ -1923,6 +1925,18 @@ const Transaction = memo(function Transaction({
                     color: theme.formInputTextHighlight,
                   }
                 : valueStyle
+            }
+            unexposedContent={
+              !categoryId &&
+              !isPreview &&
+              isAmazonPayee(payee?.name, importedPayee)
+                ? contentProps => (
+                    <>
+                      <UnexposedCellContent {...contentProps} />
+                      <AmazonLookupIconButton />
+                    </>
+                  )
+                : undefined
             }
             onUpdate={async value => {
               if (value === 'split') {
