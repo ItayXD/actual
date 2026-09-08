@@ -96,8 +96,11 @@ Neither is code, and the workflow cannot do either for itself:
    mirror that must never be committed to — so the workflow can only live on `fork/main`.
    Settings → General → Default branch.
 2. **Enable the workflow.** Scheduled workflows are disabled by default in a fork:
-   `gh workflow enable "Fork Upstream Sync"`, or the Actions tab. A private repo is exempt
-   from the 60-day inactivity auto-disable, so no keepalive job is needed.
+   `gh workflow enable "Fork Upstream Sync"`, or the Actions tab. This fork is **public**,
+   so the 60-day inactivity auto-disable applies: GitHub turns a scheduled workflow off
+   after 60 days with no repository activity, and emails the owner. A landed sync is a
+   commit, so monthly releases keep the timer reset by themselves — but a sync left
+   conflicted and unmerged for two months will stop the schedule until you re-enable it.
 
 ## Sync compatibility — hard rules
 

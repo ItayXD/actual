@@ -23,8 +23,12 @@
 #      committing to `master` (it is a pristine mirror) — so this file can only
 #      live on fork/main. Settings -> General -> Default branch.
 #   2. Scheduled workflows are disabled by default in a fork. Enable this one
-#      once: Actions tab, or `gh workflow enable "Fork Upstream Sync"`. A private
-#      repo is exempt from the 60-day inactivity auto-disable, so no keepalive.
+#      once: Actions tab, or `gh workflow enable "Fork Upstream Sync"`.
+#      This fork is PUBLIC, so the 60-day inactivity auto-disable does apply:
+#      GitHub turns a scheduled workflow off after 60 days without repository
+#      activity (and emails the owner). A landed sync is a commit, so a monthly
+#      release keeps the timer reset on its own — but if a sync sits conflicted
+#      and unmerged for two months, the schedule stops and needs re-enabling.
 name: Fork Upstream Sync
 
 defaults:
@@ -401,7 +405,7 @@ jobs:
           gh workflow list --all --limit 200 --json id,name,path,state \
             --jq '.[] | select(.state == "active") | [.id, .path, .name] | @tsv' |
             while IFS=$'\t' read -r id path name; do
-              file=$(basename "$path")
+              file=${path##*/}
               case " $FORK_WORKFLOWS " in
                 *" $file "*)
                   echo "keeping   $file ($name)"
