@@ -201,6 +201,18 @@ export function ExperimentalFeatures() {
               </View>
             )}
             <FeatureToggle
+              flag="insights"
+              note={
+                <Trans>
+                  Adds an Insights dashboard card that surfaces upcoming
+                  shortfalls, unusual charges and data problems it finds in your
+                  budget. Read-only: it never changes your data.
+                </Trans>
+              }
+            >
+              <Trans>Insights dashboard card</Trans>
+            </FeatureToggle>
+            <FeatureToggle
               flag="spendingPace"
               note={
                 <Trans>

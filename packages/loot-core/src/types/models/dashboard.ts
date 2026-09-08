@@ -1,6 +1,7 @@
 import type { ForecastSource } from './forecast';
 import type { CustomReportEntity } from './reports';
 import type { RuleConditionEntity } from './rule';
+import type { InsightKind, InsightSeverity } from './insights';
 
 export type DashboardPageEntity = {
   id: string;
@@ -303,6 +304,45 @@ export type PlanWidget = AbstractWidget<
   } | null
 >;
 
+/**
+ * Detection thresholds. Every field overrides a server default, so an absent
+ * object means "use the defaults" and an absent field means "use the default for
+ * that one detector". These are part of the query key, so changing one refetches
+ * rather than re-filtering stale rows.
+ */
+export type InsightThresholds = {
+  /** Balance floor for `low-balance`, minor units, keyed by account id. */
+  lowBalanceThresholds?: Record<string, number>;
+  /** How far ahead the balance projection looks, in days. */
+  horizonDays?: number;
+};
+
+export type InsightsWidget = AbstractWidget<
+  'insights-card',
+  {
+    name?: string;
+    /**
+     * Kinds switched off for this card. Stored as an opt-*out* list on purpose:
+     * an opt-in list would make any detector added in a later build invisible on
+     * every existing card.
+     */
+    mutedKinds?: InsightKind[];
+    /** Lowest severity the card renders. Absent means show everything. */
+    minSeverity?: InsightSeverity;
+    /** Hard cap on rendered rows; the list scrolls. Absent means 12. */
+    maxItems?: number;
+    /** Restrict to these accounts. Absent or empty means all on-budget accounts. */
+    accountIds?: string[];
+    thresholds?: InsightThresholds;
+    /**
+     * Render snoozed rows greyed with a Restore action. Card-local view state —
+     * the dismissal set itself lives in the synced pref
+     * `fork.insights.dismissals`, so exporting a dashboard never carries it.
+     */
+    showSnoozed?: boolean;
+  } | null
+>;
+
 type SpecializedWidget =
   | NetWorthWidget
   | CashFlowWidget
@@ -317,7 +357,8 @@ type SpecializedWidget =
   | SankeyWidget
   | AgeOfMoneyWidget
   | BalanceForecastWidget
-  | PlanWidget;
+  | PlanWidget
+  | InsightsWidget;
 export type DashboardWidgetEntity = SpecializedWidget | CustomReportWidget;
 export type NewDashboardWidgetEntity = Omit<
   DashboardWidgetEntity,

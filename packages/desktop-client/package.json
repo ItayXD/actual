@@ -129,7 +129,11 @@
     "#transactions/*": "./src/transactions/*.ts",
     "#undo/*": "./src/undo/*.ts",
     "#users/*": "./src/users/*.ts",
-    "#util/*": "./src/util/*.ts"
+    "#util/*": "./src/util/*.ts",
+    "#components/insights/InsightsList": "./src/components/insights/InsightsList.tsx",
+    "#components/insights/InsightsSettings": "./src/components/insights/InsightsSettings.tsx",
+    "#components/insights/insightsMeta": "./src/components/insights/insightsMeta.ts",
+    "#components/insights/useInsights": "./src/components/insights/useInsights.ts"
   },
   "scripts": {
     "start": "cross-env PORT=3001 vite",

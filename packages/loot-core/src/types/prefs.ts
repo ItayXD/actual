@@ -15,7 +15,8 @@ export type FeatureFlag =
   | 'monteCarloReport'
   | 'budgetTargets'
   | 'spendingPace'
-  | 'planPage';
+  | 'planPage'
+  | 'insights';
 
 /**
  * Cross-device preferences. These sync across devices when they are changed.
@@ -33,6 +34,7 @@ export type SyncedPrefs = Partial<
     | 'currencySpaceBetweenAmountAndSymbol'
     | 'defaultCurrencyCode'
     | 'plan.comparisonBasis'
+    | 'fork.insights.dismissals'
     | `show-account-${string}-net-worth-chart`
     | `side-nav.show-balance-history-${string}`
     // @deprecated: superseded by `transaction-table-columns-${string}`; only

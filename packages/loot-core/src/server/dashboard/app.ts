@@ -47,6 +47,7 @@ export function isWidgetType(
     'age-of-money-card',
     'monte-carlo-card',
     'plan-card',
+    'insights-card',
   ].includes(type);
 }
 

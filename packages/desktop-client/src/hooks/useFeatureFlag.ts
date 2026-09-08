@@ -20,6 +20,7 @@ const DEFAULT_FEATURE_FLAG_STATE: Record<FeatureFlag, boolean> = {
   budgetTargets: false,
   spendingPace: false,
   planPage: false,
+  insights: false,
 };
 
 export function useFeatureFlag(name: FeatureFlag): boolean {

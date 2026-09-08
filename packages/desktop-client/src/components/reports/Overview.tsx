@@ -66,6 +66,7 @@ import { MarkdownCard } from './reports/MarkdownCard';
 import { MissingReportCard } from './reports/MissingReportCard';
 import { MonteCarloCard } from './reports/monte-carlo/MonteCarloCard';
 import { NetWorthCard } from './reports/NetWorthCard';
+import { InsightsCard } from './reports/InsightsCard';
 import { PlanCard } from './reports/PlanCard';
 import { SankeyCard } from './reports/SankeyCard';
 import { SpendingCard } from './reports/SpendingCard';
@@ -98,6 +99,12 @@ function getWidgetMinWidth(widget: DashboardWidgetEntity) {
     return 1;
   }
 
+  // The insights card is sentences, not figures. Below four columns they wrap
+  // to three or four lines each and the card stops being scannable.
+  if (widget.type === 'insights-card') {
+    return 4;
+  }
+
   if (isCustomReportWidget(widget) || widget.type === 'markdown-card') {
     return 2;
   }
@@ -118,6 +125,7 @@ export function Overview({ dashboard }: OverviewProps) {
   const balanceForecastReportEnabled = useFeatureFlag('balanceForecastReport');
   const monteCarloReportEnabled = useFeatureFlag('monteCarloReport');
   const planPageEnabled = useFeatureFlag('planPage');
+  const insightsEnabled = useFeatureFlag('insights');
 
   const formulaMode = useFeatureFlag('formulaMode');
 
@@ -300,7 +308,8 @@ export function Overview({ dashboard }: OverviewProps) {
       widget: {
         type,
         width: 4,
-        height: type === 'sankey-card' ? 3 : 2,
+        height:
+          type === 'sankey-card' || type === 'insights-card' ? 3 : 2,
         meta,
         dashboard_page_id: dashboard.id,
       },
@@ -604,6 +613,14 @@ export function Overview({ dashboard }: OverviewProps) {
                                   },
                                 ]
                               : []),
+                            ...(insightsEnabled
+                              ? [
+                                  {
+                                    name: 'insights-card' as const,
+                                    text: t('Insights'),
+                                  },
+                                ]
+                              : []),
                             {
                               name: 'spending-card' as const,
                               text: t('Spending analysis'),
@@ -833,6 +850,16 @@ export function Overview({ dashboard }: OverviewProps) {
                           />
                         ) : widget.type === 'plan-card' && planPageEnabled ? (
                           <PlanCard
+                            widgetId={item.i}
+                            isEditing={isEditing}
+                            meta={widget.meta}
+                            onMetaChange={newMeta =>
+                              onMetaChange(item, newMeta)
+                            }
+                          />
+                        ) : widget.type === 'insights-card' &&
+                          insightsEnabled ? (
+                          <InsightsCard
                             widgetId={item.i}
                             isEditing={isEditing}
                             meta={widget.meta}

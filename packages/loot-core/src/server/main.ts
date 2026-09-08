@@ -23,6 +23,7 @@ import { app as encryptionApp } from './encryption/app';
 import { withErrorCode } from './errors';
 import { app as filtersApp } from './filters/app';
 import { app as forecastApp } from './forecast/app';
+import { app as insightsApp } from './insights/app';
 import { app as formulasApp } from './formulas/app';
 import { app } from './main-app';
 import { mutator, runHandler } from './mutators';
@@ -152,6 +153,7 @@ app.combine(
   budgetFilesApp,
   encryptionApp,
   tagsApp,
+  insightsApp,
 );
 
 export function getDefaultDocumentDir() {
