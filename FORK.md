@@ -143,14 +143,93 @@ upgrade the PikaPods image, merge upstream and rebuild the fork _first_.
 2. **Fork tooling as new files, never edits** (`bin/fork-build-mac`,
    `.github/workflows/fork-desktop.yml`). Do not edit `bin/package-electron` or any
    existing workflow.
-3. Touch existing files in the fewest, smallest, **last-line-most** places.
+3. Touch existing files in the fewest, smallest places, in one contiguous block.
+   Position is **not** a reliable defence: upstream inserts at both ends of its own
+   lists — in 26.9.0 it added `newSidebarUI` to the _top_ of the `FeatureFlag` union
+   while appending to `GlobalPrefs` at the bottom. Whether relocating a registration
+   helps is empirical; measure it with the recipe below instead of assuming.
 4. **Never run `yarn lint:fix` / `oxfmt` repo-wide** on `fork/main` — it rewrites untouched
    files and generates hundreds of conflict hunks.
-5. Avoid new dependencies. On a `yarn.lock` conflict take upstream's wholesale
-   (`git checkout --theirs yarn.lock`), then `yarn install` and commit the regenerated lock.
+5. Avoid new dependencies. `bin/fork-sync` resolves a `yarn.lock` conflict for you (take
+   upstream's wholesale, then `yarn install`); by hand it is
+   `git checkout --theirs yarn.lock && yarn install`.
 6. **Don't edit `packages/desktop-electron/package.json`.** Upstream bumps its `version` on
    every release. Select build targets on the electron-builder CLI instead
    (`yarn electron-builder --mac dmg:arm64`), and stamp the fork version at build time.
+
+### Where the conflicts actually come from
+
+Measured on 2026-09-08, per file, against upstream's real changes since each past
+release (the recipe is below; counts are conflicting hunks after the relocations):
+
+| upstream changes since | conflicts before | after |
+| ---------------------- | ---------------- | ----- |
+| 26.8.1 (86 commits)    | 1                | 1     |
+| 26.8.0 (109 commits)   | 6                | 4     |
+| 26.7.0 (198 commits)   | 8                | 4     |
+
+Two things fall out of that:
+
+- **A release cycle's worth of churn is cheap.** One month collides on ~1 file; skipping
+  a month multiplies it several times over. Syncing on every release is the cheap
+  cadence — letting two or three pile up is what makes a merge painful.
+- **Not one conflict was in the fork's own logic.** Every recurring one is a
+  _registration_ edit — adding a feature flag to a union, a widget type to a list, a route,
+  a nav row, a dashboard card. The fork's real work (`goal-template.ts`,
+  `category-template-context.ts`, the `plan/` and `targets/` directories) never conflicted,
+  because it lives in new files or in regions upstream does not touch.
+
+`.fork-hotspots` lists those registration points and what the fork registers at each.
+`bin/fork-sync` and the sync PR both use it to split a conflict list into "routine
+boilerplate, same resolution as last month" and "upstream changed something the fork's
+logic rests on" — the second is the only kind worth slowing down for.
+
+### Measuring it yourself, per file
+
+This conflicts exactly when the fork's hunks overlap upstream's, which is what a 3-way
+merge tests — no rebasing, no scratch clone:
+
+```bash
+R=ecf069d35   # a past release commit on master
+F=packages/loot-core/src/types/prefs.ts
+git merge-file -q -p <(git show "$R:$F") <(git show db1b0ea97:"$F") \
+  <(git show fork/main:"$F") | grep -c '^<<<<<<<'
+```
+
+Moving the two dashboard widget lists to the front of their arrays took them from 1
+conflict to 0 in every window tested, and `Overview.tsx` from 3 to 1. The identical move
+applied to the `FeatureFlag` union made it _worse_ — which is how the "put it first" rule
+got retired. Measure before believing.
+
+What remains in a normal month is `FinancesApp.tsx`, and it is a single **import line**:
+`oxfmt` sorts imports, so the fork's `./plan/PlanRoute` lands in a region upstream also
+adds to. One line, one obvious resolution — exactly what `rerere` replays.
+
+The only thing that removes a conflict _entirely_ is the fork adding **zero** lines to the
+file. That is why rule 1 ("new code in new directories") carries most of the weight here,
+and why the fork's actual logic has never conflicted.
+
+`git rerere` is already enabled here, which is what makes the remaining collisions cheap:
+it records each resolution and replays it the next time the same conflict appears. Check it
+survived with `git config --get rerere.enabled`. Its cache is local to this clone, so CI
+cannot use it — CI may report a conflict your machine then resolves by itself.
+
+### Unattended merges
+
+`Fork Upstream Sync` merges the PR itself when the merge is clean **and** the compat gate,
+`check-migrations`, typecheck, lint and the whole test suite pass — so an uneventful
+release lands with nobody looking at it. Anything else stops and waits: a conflict, a
+failing check, a compat-gate rejection.
+
+That direction is the safe one. The hard rule is that this fork must never be _behind_
+another client touching the budget file, so a validated merge left sitting is itself the
+risk.
+
+Validation runs with the dependency and Lage caches **off** (`cache: 'false'`,
+`yarn test:debug`). A restored Lage cache can cache-_skip_ a whole package instead of
+testing it — locally `yarn test` skips `@actual-app/web` outright — and a verdict that
+merges code unattended must not rest on that. To take one release manually, dispatch the
+workflow with `auto_merge` unchecked.
 
 ## Building the desktop app
 

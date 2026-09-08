@@ -42,6 +42,10 @@ on:
         description: 'Sync even when the release has not changed'
         type: boolean
         default: false
+      auto_merge:
+        description: 'Merge automatically when the merge is clean and every check passes'
+        type: boolean
+        default: true
 
 permissions:
   contents: write # fast-forward master, push the sync branch
@@ -222,6 +226,21 @@ jobs:
           echo >>"$report"
 
           if [ '${{ steps.merge.outputs.status }}' = 'conflicted' ]; then
+            # Triage against .fork-hotspots so the PR says whether this is routine
+            # registration boilerplate or something that needs thought. Written to
+            # files rather than shell variables: embedded newlines would terminate
+            # this YAML block scalar.
+            : >/tmp/routine.md; : >/tmp/novel.md
+            grep -v '^#' .fork-hotspots 2>/dev/null | grep -v '^$' | cut -f1 >/tmp/hotspots.txt
+            while read -r f; do
+              [ -n "$f" ] || continue
+              if grep -qxF "$f" /tmp/hotspots.txt; then
+                what=$(awk -F'\t' -v p="$f" '$1==p {print $2}' .fork-hotspots)
+                echo "- \`$f\` — $what" >>/tmp/routine.md
+              else
+                echo "- \`$f\`" >>/tmp/novel.md
+              fi
+            done </tmp/conflicts.txt
             {
               echo "#### ⚠️ This merge conflicts"
               echo
@@ -230,9 +249,19 @@ jobs:
               echo 'bin/fork-sync'
               echo '```'
               echo
-              echo "Conflicted paths:"
-              echo
-              printf -- '- `%s`\n' $(cat /tmp/conflicts.txt)
+              if [ -s /tmp/routine.md ]; then
+                echo "**Routine registration points.** Same resolution every release, and \`git rerere\` may replay them for you:"
+                echo
+                cat /tmp/routine.md
+                echo
+              fi
+              if [ -s /tmp/novel.md ]; then
+                echo "**Needs a careful read.** Not a known registration point, so upstream changed code the fork's logic rests on:"
+                echo
+                cat /tmp/novel.md
+              else
+                echo "_Every conflict is a known registration point — this should be a quick one._"
+              fi
             } >>"$report"
           fi
           cat "$report" >>"$GITHUB_STEP_SUMMARY"
@@ -273,6 +302,12 @@ jobs:
       - name: Set up environment
         if: steps.merge.outputs.status == 'clean'
         uses: ./.github/actions/setup
+        with:
+          # No cache: this run's verdict decides whether the merge lands
+          # unattended, and a restored lage cache can cache-SKIP an entire
+          # package rather than test it. Upstream does the same in its release
+          # jobs ("avoid restoring potentially poisoned caches").
+          cache: 'false'
 
       - name: Check migrations
         if: steps.merge.outputs.status == 'clean'
@@ -286,9 +321,12 @@ jobs:
         if: steps.merge.outputs.status == 'clean'
         run: yarn lint
 
+      # test:debug is `lage test --no-cache --continue` — belt and braces with
+      # cache:'false' above, and it keeps running after the first failure so the
+      # PR gets the whole picture instead of just the first broken package.
       - name: Test
         if: steps.merge.outputs.status == 'clean'
-        run: yarn test
+        run: yarn test:debug
 
       - name: Record validation outcome on the PR
         if: always() && steps.pr.outputs.number != ''
@@ -310,6 +348,43 @@ jobs:
             fi
           } >>/tmp/report.md
           gh pr edit '${{ steps.pr.outputs.number }}' --body-file /tmp/report.md
+
+      # The point of the whole workflow: a routine release lands without anyone
+      # touching it. `success()` is false if ANY earlier step failed, so this
+      # only fires when the merge was clean AND the compat gate, check-migrations,
+      # typecheck, lint and the full uncached test suite all passed.
+      #
+      # Merging in this direction is the safe one: FORK.md's hard rule is that
+      # this fork must never be BEHIND another client touching the budget file,
+      # so a validated merge sitting unmerged is itself a risk. A conflicted or
+      # failing sync still stops and waits for a human.
+      - name: Auto-merge the sync PR
+        id: automerge
+        if: |
+          success()
+          && steps.merge.outputs.status == 'clean'
+          && steps.pr.outputs.number != ''
+          && (github.event_name == 'schedule' || inputs.auto_merge)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # --merge, never squash or rebase: fork/main must record a real merge
+          # commit so the next sync's merge base is correct (FORK.md 'Branches').
+          # The sync branch is a pointer at the upstream mirror commit and gets
+          # force-updated next run, so it is never deleted.
+          if gh pr merge '${{ steps.pr.outputs.number }}' --merge; then
+            echo "merged=true" >>"$GITHUB_OUTPUT"
+            echo "Merged #${{ steps.pr.outputs.number }} into fork/main."
+            {
+              echo
+              echo "🤖 Auto-merged: clean merge, and every check passed."
+              echo "Pull it locally with \`git checkout fork/main && git pull\`."
+            } >>/tmp/report.md
+            gh pr edit '${{ steps.pr.outputs.number }}' --body-file /tmp/report.md || true
+          else
+            echo "merged=false" >>"$GITHUB_OUTPUT"
+            echo "::warning::Everything passed but the merge was refused — check branch protection or a required review on fork/main."
+          fi
 
       # FORK.md: newly added upstream workflows arrive enabled, and every one of
       # them targets depot-* runners that never resolve in a fork — so they queue

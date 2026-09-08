@@ -1,0 +1,25 @@
+# Upstream files the fork edits purely to REGISTER something, and what it
+# registers there. Read by bin/fork-sync and .github/workflows/fork-sync.yml to
+# triage a conflicted merge: a conflict confined to this list is routine
+# boilerplate whose resolution shape is always the same (and which git rerere
+# has probably already replayed). A conflict OUTSIDE this list means upstream
+# changed code the fork's logic depends on — read that one carefully.
+#
+# Measured 2026-09-08 by rebasing the fork's commits onto past releases: these
+# are the files that actually recurred across 26.7.0, 26.8.0 and 26.8.1.
+#
+# Format: <path><TAB><what the fork registers>
+# Keep this list in sync when the fork gains a new registration point.
+
+packages/loot-core/src/types/prefs.ts	feature-flag union + synced pref keys
+packages/desktop-client/src/hooks/useFeatureFlag.ts	feature-flag defaults
+packages/desktop-client/src/components/settings/Experimental.tsx	feature-flag toggles
+packages/loot-core/src/types/models/dashboard.ts	dashboard widget type union
+packages/loot-core/src/server/dashboard/app.ts	dashboard widget type list
+packages/loot-core/src/server/dashboard/app.test.ts	dashboard widget type list
+packages/desktop-client/src/components/reports/Overview.tsx	dashboard card registration
+packages/desktop-client/src/components/FinancesApp.tsx	route registration
+packages/desktop-client/src/components/sidebar/redesign/PrimaryNav.tsx	sidebar nav entry
+packages/desktop-client/src/components/sidebar/PrimaryButtons.tsx	sidebar nav entry
+packages/desktop-client/src/components/CommandBar.tsx	command palette entry
+yarn.lock	generated — always take upstream's and reinstall

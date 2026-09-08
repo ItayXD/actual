@@ -90,6 +90,14 @@ git checkout --quiet fork/main || die "could not return to fork/main"
 
 # --- The merge itself.
 say "Merging master into fork/main"
+
+# rerere replays a conflict resolution the next time the same conflict appears.
+# For a long-lived fork whose registration points collide with upstream every
+# release, it is the difference between resolving once and resolving monthly.
+if [ "$(git config --get rerere.enabled)" != 'true' ]; then
+  echo "    note: git rerere is off. Turn it on so each resolution is recorded:"
+  echo "            git config rerere.enabled true"
+fi
 incoming=$(git rev-list --count HEAD..master)
 echo "    $incoming upstream commit(s) incoming"
 
@@ -106,16 +114,51 @@ fi
 if git merge --no-edit -m "[AI] Merge upstream $upstream_version into fork/main" master; then
   say "Merge clean."
 else
+  # yarn.lock is generated, and FORK.md's rule for it is unconditional: take
+  # upstream's and regenerate. Doing that here removes an entire conflict class
+  # rather than reprinting the instructions every month.
+  if git diff --name-only --diff-filter=U | grep -qx 'yarn.lock'; then
+    say "Auto-resolving yarn.lock (taking upstream's, then reinstalling)"
+    git checkout --theirs yarn.lock && git add yarn.lock
+    if yarn install >/dev/null 2>&1; then
+      git add yarn.lock
+      echo "    regenerated and staged"
+    else
+      echo "    'yarn install' failed — resolve yarn.lock by hand" >&2
+    fi
+  fi
+
   conflicts=$(git diff --name-only --diff-filter=U)
-  cat >&2 <<MSG
 
-$(printf '\033[31mMerge conflicted.\033[0m') Resolve these, then re-run with --no-checks skipped:
+  if [ -z "$conflicts" ]; then
+    git commit --no-edit --quiet
+    say "Merge complete (only yarn.lock conflicted; auto-resolved)."
+  else
+    # Triage: a conflict confined to the known registration points is routine
+    # boilerplate. One outside them means upstream changed code the fork's logic
+    # rests on, which is the case that actually needs thought.
+    hotspots=$(grep -v '^#' .fork-hotspots 2>/dev/null | grep -v '^$' | cut -f1)
+    routine=''; novel=''
+    for f in $conflicts; do
+      if printf '%s\n' "$hotspots" | grep -qxF "$f"; then
+        note=$(grep -F "$f	" .fork-hotspots | cut -f2)
+        routine="$routine  $f — $note
+"
+      else
+        novel="$novel  $f
+"
+      fi
+    done
 
-$(printf '  %s\n' $conflicts)
-
-FORK.md guidance for the known cases:
-  yarn.lock         take upstream's wholesale, then regenerate:
-                      git checkout --theirs yarn.lock && yarn install && git add yarn.lock
+    printf '\n\033[31mMerge conflicted.\033[0m\n\n' >&2
+    if [ -n "$routine" ]; then
+      printf 'Routine registration points (same resolution every time; rerere may\nhave replayed some already — check with git diff):\n%s\n' "$routine" >&2
+    fi
+    if [ -n "$novel" ]; then
+      printf '\033[33mNot a known registration point — read these carefully:\033[0m\n%s\n' "$novel" >&2
+    fi
+    cat >&2 <<'MSG'
+FORK.md guidance:
   package.json      the fork only edits the 'imports' map; upstream only bumps
                     'version'. Keep both.
   loot-core/budget  the fork's target/plan work lives here. Never resolve toward
@@ -127,7 +170,8 @@ generates hundreds of conflict hunks (FORK.md 'Keeping merges cheap' #4).
 
 When done:  git add -A && git commit && bin/fork-compat-check && yarn typecheck && yarn test
 MSG
-  exit 1
+    exit 1
+  fi
 fi
 
 if [ "$run_checks" -eq 0 ]; then
