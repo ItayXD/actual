@@ -91,16 +91,22 @@ const CustomTooltip = ({
 
   const maxTooltipItems = 5;
 
-  const visibleItems = useMemo(() => {
-    const nonZero = items.filter(p => p.value !== 0);
-    if (!compact || nonZero.length <= maxTooltipItems) return nonZero;
+  const nonZeroItems = useMemo(() => {
+    return items.filter(p => p.value !== 0);
+  }, [items]);
 
-    const hoveredIndex = nonZero.findIndex(p => tooltip === p.name);
+  const visibleItems = useMemo(() => {
+    if (!compact || nonZeroItems.length <= maxTooltipItems) return nonZeroItems;
+
+    const hoveredIndex = nonZeroItems.findIndex(p => tooltip === p.name);
     if (hoveredIndex >= maxTooltipItems) {
-      return [...nonZero.slice(0, maxTooltipItems - 1), nonZero[hoveredIndex]];
+      return [
+        ...nonZeroItems.slice(0, maxTooltipItems - 1),
+        nonZeroItems[hoveredIndex],
+      ];
     }
-    return nonZero.slice(0, maxTooltipItems);
-  }, [compact, items, tooltip]);
+    return nonZeroItems.slice(0, maxTooltipItems);
+  }, [compact, nonZeroItems, tooltip]);
 
   if (active && items.length) {
     return (
@@ -109,6 +115,7 @@ const CustomTooltip = ({
           zIndex: 1000,
           pointerEvents: 'none',
           borderRadius: 2,
+          // oxlint-disable-next-line actual/no-color-literals
           boxShadow: '0 1px 6px rgba(0, 0, 0, .20)',
           backgroundColor: theme.menuBackground,
           color: theme.menuItemText,
@@ -139,7 +146,7 @@ const CustomTooltip = ({
                 />
               );
             })}
-            {compact && items.length > visibleItems.length && '...'}
+            {compact && nonZeroItems.length > visibleItems.length && '...'}
             <AlignedText
               left={t('Total')}
               right={
@@ -314,6 +321,8 @@ export function StackedBarGraph({
                         field: groupBy.toLowerCase(),
                         id: entry.id,
                         uncategorizedId: entry.uncategorizedId,
+                        bucketTagNames: entry.bucketTagNames,
+                        scopeTagNames: data.scopeTagNames,
                         interval,
                       })
                     }

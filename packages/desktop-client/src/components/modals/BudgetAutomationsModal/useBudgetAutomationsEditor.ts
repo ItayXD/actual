@@ -22,6 +22,7 @@ import {
 } from '#components/budget/goals/cleanupModel';
 import type { CleanupConfig } from '#components/budget/goals/cleanupModel';
 import {
+  isBlockingAutomationError,
   validateAutomation,
   validatePercentageAllocation,
   validateSchedulePriorities,
@@ -71,6 +72,7 @@ export function useBudgetAutomationsEditor({
   onClose,
 }: UseBudgetAutomationsEditorArgs) {
   const dispatch = useDispatch();
+  const [today] = useState(() => new Date());
   const queryClient = useQueryClient();
   const { groups: cleanupGroups, createGroup: createCleanupGroup } =
     useCleanupGroups();
@@ -174,6 +176,7 @@ export function useBudgetAutomationsEditor({
           },
         ],
         source: 'ui',
+        month,
       });
       // Projected targets are cached indefinitely and keyed only by month, so
       // changing an automation has to invalidate them explicitly — no budget
@@ -224,7 +227,7 @@ export function useBudgetAutomationsEditor({
       entry.displayType,
       templates,
       schedules,
-      new Date(),
+      today,
       validPercentageSources,
     ),
   );
@@ -258,7 +261,7 @@ export function useBudgetAutomationsEditor({
   const contributions: (number | null)[] = entries.map((_, i) =>
     dryRun?.perTemplate?.[i] != null ? dryRun.perTemplate[i] : null,
   );
-  const hasErrors = automationErrors.some(error => error !== null);
+  const hasErrors = automationErrors.some(isBlockingAutomationError);
   const conflicts = [
     validatePercentageAllocation(templates),
     validateSchedulePriorities(templates),

@@ -72,44 +72,35 @@ import { SankeyCard } from './reports/SankeyCard';
 import { SpendingCard } from './reports/SpendingCard';
 import { SummaryCard } from './reports/SummaryCard';
 
-function isCustomReportWidget(
-  widget: DashboardWidgetEntity,
-): widget is CustomReportWidget {
-  return widget.type === 'custom-report';
-}
-
 function getWidgetMinHeight(widget: DashboardWidgetEntity) {
-  if (
-    isCustomReportWidget(widget) ||
-    widget.type === 'markdown-card' ||
-    widget.type === 'formula-card'
-  ) {
-    return 1;
+  switch (widget.type) {
+    case 'custom-report':
+    case 'markdown-card':
+    case 'formula-card':
+      return 1;
+    case 'sankey-card':
+      return 3;
+    default:
+      return 2;
   }
-
-  if (widget.type === 'sankey-card') {
-    return 3;
-  }
-
-  return 2;
 }
 
 function getWidgetMinWidth(widget: DashboardWidgetEntity) {
-  if (widget.type === 'formula-card') {
-    return 1;
+  switch (widget.type) {
+    // The insights card is sentences, not figures. Below four columns they
+    // wrap to three or four lines each and the card stops being scannable.
+    case 'insights-card':
+      return 4;
+    case 'formula-card':
+      return 1;
+    case 'custom-report':
+    case 'markdown-card':
+    case 'cash-flow-card':
+    case 'summary-card':
+      return 2;
+    default:
+      return 3;
   }
-
-  // The insights card is sentences, not figures. Below four columns they wrap
-  // to three or four lines each and the card stops being scannable.
-  if (widget.type === 'insights-card') {
-    return 4;
-  }
-
-  if (isCustomReportWidget(widget) || widget.type === 'markdown-card') {
-    return 2;
-  }
-
-  return 3;
 }
 
 type OverviewProps = {
@@ -315,7 +306,7 @@ export function Overview({ dashboard }: OverviewProps) {
     });
   };
 
-  const onExport = () => {
+  const onExport = async () => {
     const data = {
       version: 1,
       widgets: desktopLayout.map(item => {
@@ -325,7 +316,7 @@ export function Overview({ dashboard }: OverviewProps) {
           throw new Error(`Unable to query widget: ${item.i}`);
         }
 
-        if (isCustomReportWidget(widget)) {
+        if (widget.type === 'custom-report') {
           const customReport = customReportMap.get(widget.meta.id);
 
           if (!customReport) {
@@ -344,11 +335,22 @@ export function Overview({ dashboard }: OverviewProps) {
       }),
     } satisfies ExportImportDashboard;
 
-    void window.Actual.saveFile(
-      JSON.stringify(data, null, 2),
-      'dashboard.json',
-      t('Export Dashboard'),
-    );
+    try {
+      await window.Actual.saveFile(
+        JSON.stringify(data, null, 2),
+        'dashboard.json',
+        t('Export Dashboard'),
+      );
+    } catch {
+      dispatch(
+        addNotification({
+          notification: {
+            type: 'error',
+            message: t('Failed to export the dashboard file.'),
+          },
+        }),
+      );
+    }
   };
 
   const importDashboardPageMutation = useImportDashboardPageMutation();
@@ -730,7 +732,7 @@ export function Overview({ dashboard }: OverviewProps) {
                                 void onResetDashboard();
                                 break;
                               case 'export':
-                                onExport();
+                                void onExport();
                                 break;
                               case 'import':
                                 void onImport();

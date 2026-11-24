@@ -1,3 +1,4 @@
+import type { MigrationPhase } from '#platform/server/sqlite/storage/types';
 import type { Backup } from '#server/budgetfiles/backups';
 import type { UndoState } from '#server/undo';
 
@@ -23,6 +24,7 @@ type SyncEvent = {
   | {
       type: 'applied';
       tables: string[];
+      requestId?: string;
       data?: Map<string, unknown>;
       prevData?: Map<string, unknown>;
     }
@@ -41,6 +43,17 @@ type SyncEvent = {
   | {
       type: 'unauthorized';
     }
+  | {
+      // Some received messages were written by a newer version of the
+      // app and can't be shown until this client updates
+      type: 'deferred-messages';
+    }
+  | {
+      // A deferred change from another device was discarded — it could
+      // never be applied, or a sync reset made this file the source of
+      // truth without it
+      type: 'dropped-messages';
+    }
 );
 
 type BackupUpdatedEvent = Backup[];
@@ -51,6 +64,10 @@ type CellsChangedEvent = Array<{
 }>;
 
 type FallbackWriteErrorEvent = undefined;
+// The IndexedDB fallback could not store a file, retry included
+type StorageWriteFailedEvent = { path: string };
+// The browser dropped the private file system under the running app
+type StorageLostEvent = undefined;
 type FinishImportEvent = undefined;
 type FinishLoadEvent = undefined;
 type IndexeddbQuotaErrorEvent = undefined;
@@ -60,7 +77,37 @@ type OrphanedPayeesEvent = {
   updatedPayeeIds: string[];
 };
 
+export type ImportStep =
+  | 'accounts'
+  | 'categories'
+  | 'payees'
+  | 'payee-locations'
+  | 'tags'
+  | 'transactions'
+  | 'scheduled-transactions'
+  | 'budgets'
+  | 'finishing';
+
+type ImportProgressEvent = {
+  step: ImportStep;
+  /** Items imported so far in this step. `total` is 0 when it has no count. */
+  current: number;
+  total: number;
+  /** Items imported so far across every step, for an overall progress bar. */
+  overallCurrent: number;
+  overallTotal: number;
+  /**
+   * The batch that was just imported, when a step works in batches rather than
+   * one item at a time.
+   */
+  batch?: { amount: number; account: string };
+};
+
 type PrefsUpdatedEvent = undefined;
+
+// Progress while a budget's database is moved from absurd-sql's
+// IndexedDB blocks into the sqlite-wasm storage
+type StorageMigrationEvent = { phase: MigrationPhase; percent?: number };
 type SchedulesOfflineEvent = undefined;
 type ServerErrorEvent = undefined;
 type ShowBudgetsEvent = undefined;
@@ -72,8 +119,11 @@ export type ServerEvents = {
   'backups-updated': BackupUpdatedEvent;
   'cells-changed': CellsChangedEvent;
   'fallback-write-error': FallbackWriteErrorEvent;
+  'storage-write-failed': StorageWriteFailedEvent;
+  'storage-lost': StorageLostEvent;
   'finish-import': FinishImportEvent;
   'finish-load': FinishLoadEvent;
+  'import-progress': ImportProgressEvent;
   'indexeddb-quota-error': IndexeddbQuotaErrorEvent;
   'orphaned-payees': OrphanedPayeesEvent;
   'prefs-updated': PrefsUpdatedEvent;
@@ -82,6 +132,7 @@ export type ServerEvents = {
   'show-budgets': ShowBudgetsEvent;
   'start-import': StartImportEvent;
   'start-load': StartLoadEvent;
+  'storage-migration': StorageMigrationEvent;
   'sync-event': SyncEvent;
   'undo-event': UndoState;
   'api-fetch-redirected': ApiFetchRedirectedEvent;

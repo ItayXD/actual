@@ -36,8 +36,11 @@ function KeyIcon({ shortcut, style }: KeyIconProps) {
         alignItems: 'center',
         justifyContent: 'center',
         fontWeight: 'bold',
+        // oxlint-disable-next-line actual/no-color-literals
         backgroundColor: '#fff',
+        // oxlint-disable-next-line actual/no-color-literals
         color: '#000',
+        // oxlint-disable-next-line actual/no-color-literals
         border: '1px solid #000',
         borderRadius: 8,
         minWidth: 30,
@@ -564,7 +567,7 @@ export function KeyboardShortcutModal() {
                     padding: 20,
                   }}
                 >
-                  <Text style={{ fontSize: 15 }}>
+                  <Text size="large">
                     <Trans>
                       {isSearching
                         ? 'No matching shortcuts'

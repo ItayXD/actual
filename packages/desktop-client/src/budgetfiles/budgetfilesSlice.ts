@@ -59,11 +59,26 @@ export const loadBudget = createAppAsyncThunk(
     dispatch(setAppState({ loadingText: t('Loading...') }));
 
     // Loading a budget may fail
-    const { error } = await send('load-budget', { id, ...options });
+    const {
+      error,
+      budgetName,
+      canKeepPreviousStorage = null,
+    } = await send('load-budget', { id, ...options });
 
     if (error) {
-      const message = getSyncError(error, id);
-      if (error === 'out-of-sync-migrations') {
+      // By the name the user knows the budget by, where the backend got
+      // far enough to tell it
+      const message = getSyncError(error, budgetName ?? id);
+      if (error === 'storage-migration-failed') {
+        dispatch(
+          pushModal({
+            modal: {
+              name: 'storage-migration-failed',
+              options: { budgetId: id, message, canKeepPreviousStorage },
+            },
+          }),
+        );
+      } else if (error === 'out-of-sync-migrations') {
         dispatch(pushModal({ modal: { name: 'out-of-sync-migrations' } }));
       } else if (error === 'out-of-sync-data') {
         // confirm is not available on iOS
@@ -286,25 +301,30 @@ export const closeAndLoadBudget = createAppAsyncThunk(
 
 type CloseAndDownloadBudgetPayload = {
   cloudFileId: string;
+  localId?: string;
 };
 
 export const closeAndDownloadBudget = createAppAsyncThunk(
   `${sliceName}/closeAndDownloadBudget`,
-  async ({ cloudFileId }: CloseAndDownloadBudgetPayload, { dispatch }) => {
+  async (
+    { cloudFileId, localId }: CloseAndDownloadBudgetPayload,
+    { dispatch },
+  ) => {
     await dispatch(closeBudget());
-    await dispatch(downloadBudget({ cloudFileId, replace: true }));
+    await dispatch(downloadBudget({ cloudFileId, localId, replace: true }));
   },
 );
 
 type DownloadBudgetPayload = {
   cloudFileId: string;
+  localId?: string;
   replace?: boolean;
 };
 
 export const downloadBudget = createAppAsyncThunk(
   `${sliceName}/downloadBudget`,
   async (
-    { cloudFileId, replace = false }: DownloadBudgetPayload,
+    { cloudFileId, localId, replace = false }: DownloadBudgetPayload,
     { dispatch },
   ): Promise<string | null> => {
     dispatch(
@@ -315,6 +335,7 @@ export const downloadBudget = createAppAsyncThunk(
 
     const { id, error } = await send('download-budget', {
       cloudFileId,
+      localId,
     });
 
     if (error) {
@@ -328,7 +349,7 @@ export const downloadBudget = createAppAsyncThunk(
           ),
           cloudFileId,
           onSuccess: () => {
-            void dispatch(downloadBudget({ cloudFileId, replace }));
+            void dispatch(downloadBudget({ cloudFileId, localId, replace }));
           },
         };
 
@@ -358,7 +379,7 @@ export const downloadBudget = createAppAsyncThunk(
         );
 
         return await dispatch(
-          downloadBudget({ cloudFileId, replace: true }),
+          downloadBudget({ cloudFileId, localId, replace: true }),
         ).unwrap();
       } else {
         dispatch(setAppState({ loadingText: null }));

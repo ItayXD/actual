@@ -1,9 +1,11 @@
+import { logger } from '#platform/server/log';
 import { aqlQuery } from '#server/aql';
 import * as db from '#server/db';
 import { batchMessages } from '#server/sync';
 // @ts-strict-ignore
 import * as monthUtils from '#shared/months';
 import { q } from '#shared/query';
+import { isTemplateExpired } from '#shared/templates';
 import type { CategoryEntity, CategoryGroupEntity } from '#types/models';
 import type { CleanupTemplate } from '#types/models/cleanup-templates';
 import type {
@@ -42,6 +44,7 @@ export function distributeRemainder(
 export async function storeTemplates({
   categoriesWithTemplates,
   source,
+  month,
 }: {
   categoriesWithTemplates: {
     id: string;
@@ -49,6 +52,8 @@ export async function storeTemplates({
     cleanup?: CleanupTemplate[];
   }[];
   source: 'notes' | 'ui';
+  /** Also record each category's goal for this month, without budgeting it */
+  month?: string;
 }): Promise<void> {
   let touchedCleanup = false;
   await batchMessages(async () => {
@@ -69,6 +74,23 @@ export async function storeTemplates({
   });
   if (touchedCleanup) {
     await tombstoneOrphanCleanupGroups();
+  }
+  if (month) {
+    const isTracking = isTrackingBudget();
+    const { data: categories }: { data: CategoryEntity[] } = await aqlQuery(
+      q('categories')
+        .filter({ id: { $oneof: categoriesWithTemplates.map(({ id }) => id) } })
+        .select('*'),
+    );
+    const skippedIds = new Set(
+      categories.filter(c => !acceptsTemplates(c, isTracking)).map(c => c.id),
+    );
+    const goals: TemplateGoal[] = [];
+    for (const { id, templates } of categoriesWithTemplates) {
+      if (skippedIds.has(id)) continue;
+      goals.push(await getMonthGoal(month, id, templates));
+    }
+    await setGoals(month, goals);
   }
 }
 
@@ -140,6 +162,11 @@ export async function applySingleCategoryTemplate({
 
 export function runCheckTemplates() {
   return checkTemplateNotes();
+}
+
+// Income categories only take templates in tracking budgets
+function acceptsTemplates(category: CategoryEntity, isTracking: boolean) {
+  return isTracking || !category.is_income;
 }
 
 async function getCategories(): Promise<CategoryEntity[]> {
@@ -219,6 +246,7 @@ type ComputedTemplates = {
   // them. `errors` stays a flat list for the user-facing notification.
   categoryErrors: Record<CategoryEntity['id'], string>;
   orphanGoals: TemplateGoal[];
+  warnings: string[];
 };
 
 async function computeTemplates(
@@ -236,10 +264,9 @@ async function computeTemplates(
   // setup categories
   const isTracking = isTrackingBudget();
   if (!categories.length) {
-    categories = (await getCategories()).filter(
-      c => isTracking || !c.is_income,
-    );
+    categories = await getCategories();
   }
+  categories = categories.filter(c => acceptsTemplates(c, isTracking));
 
   // setup categories to process
   const templateContexts: CategoryTemplateContext[] = [];
@@ -251,6 +278,8 @@ async function computeTemplates(
   const errors: string[] = [];
   const categoryErrors: Record<CategoryEntity['id'], string> = {};
   const orphanGoals: TemplateGoal[] = [];
+  const warnings: string[] = [];
+  const currentMonth = monthUtils.currentMonth();
   for (const category of categories) {
     const { id } = category;
     const sheetName = monthUtils.sheetForMonth(month);
@@ -268,6 +297,21 @@ async function computeTemplates(
           budgeted,
           skipAvailableClamp,
         );
+        // budgeting ahead of a target that hasn't passed yet isn't worth a nudge
+        templateContext
+          .getExpiredTemplates()
+          .filter(t => isTemplateExpired(t, currentMonth))
+          .forEach(t => {
+            warnings.push(
+              `${category.name}: Ignoring ${t.amount} by ${t.month} because the target month has passed. You can remove it.`,
+            );
+          });
+        if (templateContext.hasOnlyExpiredTemplates()) {
+          if (existingGoal !== null) {
+            orphanGoals.push({ category: id, goal: null, longGoal: null });
+          }
+          continue;
+        }
         // don't use the funds that are not from templates
         if (!templateContext.isGoalOnly()) {
           availBudget += budgeted;
@@ -291,7 +335,13 @@ async function computeTemplates(
   }
 
   if (errors.length > 0 && !continueOnError) {
-    return { contexts: templateContexts, errors, categoryErrors, orphanGoals };
+    return {
+      contexts: templateContexts,
+      errors,
+      categoryErrors,
+      orphanGoals,
+      warnings,
+    };
   }
 
   const priorities = new Int32Array([...prioritiesSet]).sort((a, b) => a - b);
@@ -310,7 +360,13 @@ async function computeTemplates(
 
   distributeRemainder(templateContexts, availBudget);
 
-  return { contexts: templateContexts, errors, categoryErrors, orphanGoals };
+  return {
+    contexts: templateContexts,
+    errors,
+    categoryErrors,
+    orphanGoals,
+    warnings,
+  };
 }
 
 async function processTemplate(
@@ -319,19 +375,23 @@ async function processTemplate(
   categoryTemplates: Record<CategoryEntity['id'], Template[]>,
   categories: CategoryEntity[] = [],
 ): Promise<TemplateNotification> {
-  const { contexts, errors, orphanGoals } = await computeTemplates(
+  const { contexts, errors, orphanGoals, warnings } = await computeTemplates(
     month,
     force,
     categoryTemplates,
     categories,
   );
+  const notice: Pick<TemplateNotification, 'type' | 'sticky' | 'pre'> =
+    warnings.length > 0
+      ? { type: 'warning', sticky: true, pre: warnings.join(`\n\n`) }
+      : { type: 'message' };
 
   if (contexts.length === 0 && errors.length === 0) {
     if (orphanGoals.length > 0) {
       await setGoals(month, orphanGoals);
     }
     return {
-      type: 'message',
+      ...notice,
       message: 'templates-up-to-date',
     };
   }
@@ -361,7 +421,7 @@ async function processTemplate(
   await setGoals(month, goalList);
 
   return {
-    type: 'message',
+    ...notice,
     message: 'templates-applied',
     count: contexts.length,
   };
@@ -498,6 +558,9 @@ export async function projectTargets({
 export type DryRunCategoryResult = {
   budgeted: number;
   perTemplate: number[];
+  goal: number | null;
+  longGoal: boolean;
+  errors: string[];
 };
 
 /**
@@ -514,6 +577,15 @@ export async function dryRunCategoryTemplate({
   categoryId: CategoryEntity['id'];
   templates: Template[];
 }): Promise<DryRunCategoryResult> {
+  const empty: DryRunCategoryResult = {
+    budgeted: 0,
+    perTemplate: templates.map(() => 0),
+    goal: null,
+    longGoal: false,
+    errors: [],
+  };
+  // fork: preview through projectTargets so cross-category templates
+  // (remainder, percentage) see the rest of the budget, not this one alone.
   const [projection] = await projectTargets({
     months: [month],
     categoryIds: [categoryId],
@@ -522,11 +594,40 @@ export async function dryRunCategoryTemplate({
   const projected = projection?.categories.find(
     c => c.categoryId === categoryId,
   );
-  if (!projected || projected.error) {
-    return { budgeted: 0, perTemplate: templates.map(() => 0) };
+  if (!projected) return empty;
+  if (projected.error) {
+    const name =
+      (await getCategories()).find(c => c.id === categoryId)?.name ??
+      categoryId;
+    return { ...empty, errors: [`${name}: ${projected.error}`] };
   }
   return {
     budgeted: projected.budgeted,
     perTemplate: projected.perTemplate,
+    goal: projected.goal,
+    longGoal: projected.longGoal,
+    errors: [],
   };
+}
+
+// Records the goal the automations editor projects for the month, so it
+// shows up without running the templates
+async function getMonthGoal(
+  month: string,
+  categoryId: CategoryEntity['id'],
+  templates: Template[],
+): Promise<TemplateGoal> {
+  const noGoal = { category: categoryId, goal: null, longGoal: null };
+  if (templates.length === 0) return noGoal;
+  try {
+    const { goal, longGoal } = await dryRunCategoryTemplate({
+      month,
+      categoryId,
+      templates,
+    });
+    return { category: categoryId, goal, longGoal: longGoal ? 1 : null };
+  } catch (e) {
+    logger.warn(`Could not work out the goal for category ${categoryId}`, e);
+    return noGoal;
+  }
 }

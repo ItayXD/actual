@@ -10,29 +10,44 @@ export function validateStart(
   interval?: string,
   firstDayOfWeekIdx?: SyncedPrefs['firstDayOfWeekIdx'],
 ): [string, string, TimeFrame['mode']] {
-  let addDays: number;
   let dateStart: string;
+  let fallbackEnd: string;
   switch (interval) {
     case 'Monthly':
       dateStart = start + '-01';
-      addDays = 180;
+      fallbackEnd = monthUtils.addDays(dateStart, 180);
+      break;
+    case 'Quarterly':
+      dateStart = start + '-01';
+      // The chosen quarter and the three after it, ending on a quarter boundary
+      fallbackEnd = monthUtils.getMonthEnd(
+        monthUtils.getQuarterEnd(monthUtils.addMonths(start, 9)) + '-01',
+      );
       break;
     case 'Yearly':
       dateStart = start + '-01-01';
-      addDays = 1095;
+      fallbackEnd = monthUtils.addDays(dateStart, 1095);
+      break;
+    case 'Weekly':
+      dateStart = start;
+      fallbackEnd = monthUtils.getWeekEnd(
+        monthUtils.addDays(dateStart, 180),
+        firstDayOfWeekIdx,
+      );
       break;
     case 'Daily':
       dateStart = start;
-      addDays = 6;
+      fallbackEnd = monthUtils.addDays(dateStart, 6);
       break;
     default:
       dateStart = start;
-      addDays = 180;
+      fallbackEnd = monthUtils.addDays(dateStart, 180);
       break;
   }
 
-  if (end < start) {
-    end = monthUtils.addDays(dateStart, addDays);
+  // Compare full dates: `start` may be a shorter month or year key.
+  if (end < dateStart) {
+    end = fallbackEnd;
   }
   return boundedRange(
     earliest,
@@ -52,29 +67,44 @@ export function validateEnd(
   interval?: string,
   firstDayOfWeekIdx?: SyncedPrefs['firstDayOfWeekIdx'],
 ): [string, string, TimeFrame['mode']] {
-  let subDays: number;
   let dateEnd: string;
+  let fallbackStart: string;
   switch (interval) {
     case 'Monthly':
       dateEnd = monthUtils.getMonthEnd(end + '-01');
-      subDays = 180;
+      fallbackStart = monthUtils.subDays(dateEnd, 180);
+      break;
+    case 'Quarterly':
+      dateEnd = monthUtils.getMonthEnd(monthUtils.getQuarterEnd(end) + '-01');
+      // The chosen quarter and the three before it, starting on a quarter boundary
+      fallbackStart =
+        monthUtils.getQuarterStart(monthUtils.subMonths(end, 9)) + '-01';
       break;
     case 'Yearly':
       dateEnd = end + '-12-31';
-      subDays = 1095;
+      fallbackStart = monthUtils.subDays(dateEnd, 1095);
+      break;
+    case 'Weekly':
+      // The picked value is the first day of the week; include the whole week.
+      dateEnd = monthUtils.getWeekEnd(end, firstDayOfWeekIdx);
+      fallbackStart = monthUtils.weekFromDate(
+        monthUtils.subDays(dateEnd, 180),
+        firstDayOfWeekIdx,
+      );
       break;
     case 'Daily':
       dateEnd = end;
-      subDays = 6;
+      fallbackStart = monthUtils.subDays(dateEnd, 6);
       break;
     default:
       dateEnd = end;
-      subDays = 180;
+      fallbackStart = monthUtils.subDays(dateEnd, 180);
       break;
   }
 
-  if (start > end) {
-    start = monthUtils.subDays(dateEnd, subDays);
+  // Compare full dates: `end` may be a shorter month or year key.
+  if (start > dateEnd) {
+    start = fallbackStart;
   }
   return boundedRange(
     earliest,
@@ -98,6 +128,48 @@ export function validateRange(
   return [start, end];
 }
 
+export function boundMonthRange(
+  earliestMonth: string,
+  latestMonth: string,
+  startMonth: string,
+  endMonth: string,
+): [string, string] {
+  let boundedStart = startMonth;
+  let boundedEnd = endMonth;
+
+  if (monthUtils.isBefore(boundedStart, earliestMonth)) {
+    boundedStart = earliestMonth;
+  } else if (monthUtils.isAfter(boundedStart, latestMonth)) {
+    boundedStart = latestMonth;
+  }
+
+  if (monthUtils.isBefore(boundedEnd, earliestMonth)) {
+    boundedEnd = earliestMonth;
+  } else if (monthUtils.isAfter(boundedEnd, latestMonth)) {
+    boundedEnd = latestMonth;
+  }
+
+  if (monthUtils.isBefore(boundedEnd, boundedStart)) {
+    boundedEnd = boundedStart;
+  }
+
+  return [boundedStart, boundedEnd];
+}
+
+export function boundMonthRangeFromDates(
+  earliestDate: string,
+  latestDate: string,
+  start: string,
+  end: string,
+): [string, string] {
+  return boundMonthRange(
+    monthUtils.getMonth(earliestDate),
+    monthUtils.getMonth(latestDate),
+    monthUtils.getMonth(start),
+    monthUtils.getMonth(end),
+  );
+}
+
 function boundedRange(
   earliest: string,
   latest: string,
@@ -116,6 +188,7 @@ function boundedRange(
       latest = monthUtils.currentDay();
       break;
     case 'Monthly':
+    case 'Quarterly':
       latest = monthUtils.getMonthEnd(monthUtils.currentDay());
       break;
     case 'Yearly':
@@ -313,19 +386,20 @@ export function calculateSpendingReportTimeRange({
   isLive?: boolean;
   mode?: 'budget' | 'average' | 'single-month';
 }): [string, string] {
+  // Budget and average chart a single month, so a live report is always the
+  // current month.
   if (['budget', 'average'].includes(mode) && isLive) {
-    const month = compare ?? monthUtils.currentMonth();
+    const month = monthUtils.currentMonth();
     return [month, month];
   }
 
-  if (mode === 'single-month' && isLive && compare) {
-    return [compare, compareTo ?? monthUtils.subMonths(compare, 1)];
-  }
-
+  // Default a missing end to the month before `compare`; the shared default is
+  // the month before now, which would widen the comparison.
   const [start, end] = calculateTimeRange(
     {
       start: compare,
-      end: compareTo,
+      end:
+        compareTo ?? (compare ? monthUtils.subMonths(compare, 1) : undefined),
       mode: (isLive ?? true) ? 'sliding-window' : 'static',
     },
     {

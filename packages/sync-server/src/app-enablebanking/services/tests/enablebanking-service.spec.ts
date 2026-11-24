@@ -38,9 +38,9 @@ vi.mock('../../utils/jwt', () => ({
   getJWT: vi.fn(() => 'mock-jwt-token'),
 }));
 
-// Mock global fetch
-const mockFetch = vi.fn();
-vi.stubGlobal('fetch', mockFetch);
+// Mock provider requests
+const mockFetch = vi.hoisted(() => vi.fn());
+vi.mock('undici', () => ({ fetch: mockFetch }));
 
 function mockFetchResponse(data: unknown, ok = true, status = 200) {
   mockFetch.mockResolvedValueOnce({
@@ -401,6 +401,39 @@ describe('enableBankingService', () => {
       );
     });
 
+    it('asks for booked transactions only when told to', async () => {
+      mockFetchResponse({ transactions: [] });
+
+      await enableBankingService.getTransactions(
+        'uid',
+        '2026-01-01',
+        '2026-03-25',
+        undefined,
+        undefined,
+        { bookedOnly: true },
+      );
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.stringContaining('transaction_status=BOOK'),
+        expect.anything(),
+      );
+    });
+
+    it('does not filter by status by default', async () => {
+      mockFetchResponse({ transactions: [] });
+
+      await enableBankingService.getTransactions(
+        'uid',
+        '2026-01-01',
+        '2026-03-25',
+      );
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        expect.not.stringContaining('transaction_status'),
+        expect.anything(),
+      );
+    });
+
     it('returns continuation_key from response', async () => {
       mockFetchResponse({
         transactions: [mockCreditTransaction],
@@ -496,7 +529,7 @@ describe('enableBankingService', () => {
         continuation_key: 'stuck-key',
       });
       mockFetchResponse({
-        transactions: [mockDebitTransaction],
+        transactions: [mockCreditTransaction],
         continuation_key: 'stuck-key',
       });
 
@@ -507,7 +540,7 @@ describe('enableBankingService', () => {
       );
 
       expect(mockFetch).toHaveBeenCalledTimes(2);
-      expect(result).toHaveLength(2);
+      expect(result).toEqual([mockCreditTransaction]);
     });
   });
 

@@ -1,11 +1,12 @@
 import { listen, send } from '@actual-app/core/platform/client/connection';
+import type { ServerEvents } from '@actual-app/core/types/server-events';
 import type { QueryClient } from '@tanstack/react-query';
 import { t } from 'i18next';
 
 import { accountGroupQueries } from './account-groups';
 import { accountQueries } from './accounts';
 import { resetSync, sync } from './app/appSlice';
-import { categoryQueries } from './budget';
+import { budgetBoundsQueries, categoryQueries } from './budget';
 import {
   closeAndDownloadBudget,
   uploadBudget,
@@ -16,7 +17,46 @@ import type { Notification } from './notifications/notificationsSlice';
 import { payeeQueries } from './payees';
 import { loadPrefs } from './prefs/prefsSlice';
 import type { AppStore } from './redux/store';
-import { signOut } from './users/usersSlice';
+import { dashboardQueries, reportQueries } from './reports';
+import { getUserData, signOut } from './users/usersSlice';
+
+// Tables whose changes can move the budget's month bounds. `preferences`
+// holds the synced budget type.
+const BUDGET_BOUNDS_TABLES = [
+  'zero_budgets',
+  'reflect_budgets',
+  'transactions',
+  'categories',
+  'preferences',
+];
+
+// Notifications for sync events that can fire during budget load
+const syncNotifications: Partial<
+  Record<ServerEvents['sync-event']['type'], () => Notification>
+> = {
+  'deferred-messages': () => ({
+    id: 'deferred-messages',
+    type: 'message',
+    // Sticky: firing during budget load, it would otherwise
+    // auto-dismiss before the user can read it
+    sticky: true,
+    title: t('Update available'),
+    message: t(
+      'Some synced changes were made with a newer version of Actual. ' +
+        'They will show up here once you update this app.',
+    ),
+  }),
+  'dropped-messages': () => ({
+    id: 'dropped-messages',
+    type: 'warning',
+    sticky: true,
+    title: t('Some changes could not be applied'),
+    message: t(
+      'Some changes made on another device could not be applied ' +
+        'on this device, so your devices may show different values.',
+    ),
+  }),
+};
 
 export function listenForSyncEvent(store: AppStore, queryClient: QueryClient) {
   // TODO: Should this run on mobile too?
@@ -35,11 +75,37 @@ export function listenForSyncEvent(store: AppStore, queryClient: QueryClient) {
     }
   });
 
+  // Keep the online/offline status in step with whether syncing actually
+  // reaches the server.
+  const unlistenReachability = listen('sync-event', ({ type }) => {
+    const userData = store.getState().user.data;
+    const isReachabilityOutdated =
+      userData &&
+      ((type === 'success' && userData.offline) ||
+        (type === 'error' && !userData.offline));
+    if (isReachabilityOutdated) {
+      void store.dispatch(getUserData());
+    }
+  });
+
   let attemptedSyncRepair = false;
 
   const unlistenSuccess = listen('sync-event', event => {
     const prefs = store.getState().prefs.local;
-    if (!prefs || !prefs.id) {
+    const hasBudget = Boolean(prefs && prefs.id);
+
+    const makeNotification = syncNotifications[event.type];
+    if (makeNotification) {
+      // Accept these while a budget is loaded OR still loading (prefs
+      // arrive only after the load completes); with neither, the user
+      // has left the budget and the notification would lack context
+      if (hasBudget || store.getState().app.loadingText != null) {
+        store.dispatch(addNotification({ notification: makeNotification() }));
+      }
+      return;
+    }
+
+    if (!hasBudget) {
       // Do nothing if no budget is loaded
       return;
     }
@@ -63,6 +129,15 @@ export function listenForSyncEvent(store: AppStore, queryClient: QueryClient) {
 
       if (tables.includes('prefs')) {
         void store.dispatch(loadPrefs());
+      }
+
+      // Budget amounts, transactions, deleted categories and the budget type
+      // all change which months are available. Covers local edits, undo and
+      // incoming sync.
+      if (tables.some(table => BUDGET_BOUNDS_TABLES.includes(table))) {
+        void queryClient.invalidateQueries({
+          queryKey: budgetBoundsQueries.all(),
+        });
       }
 
       if (
@@ -95,6 +170,18 @@ export function listenForSyncEvent(store: AppStore, queryClient: QueryClient) {
       if (tables.includes('account_groups')) {
         void queryClient.invalidateQueries({
           queryKey: accountGroupQueries.lists(),
+        });
+      }
+
+      if (tables.includes('dashboard') || tables.includes('dashboard_pages')) {
+        void queryClient.invalidateQueries({
+          queryKey: dashboardQueries.lists(),
+        });
+      }
+
+      if (tables.includes('custom_reports')) {
+        void queryClient.invalidateQueries({
+          queryKey: reportQueries.lists(),
         });
       }
     } else if (event.type === 'error') {
@@ -259,7 +346,7 @@ export function listenForSyncEvent(store: AppStore, queryClient: QueryClient) {
           // the server does not match the local one. This can mean a
           // few things depending on the state, and we try to show an
           // appropriate message and call to action to fix it.
-          const { cloudFileId } = store.getState().prefs.local;
+          const { cloudFileId, id: localId } = store.getState().prefs.local;
           if (!cloudFileId) {
             console.error(
               'Received file-has-reset or file-has-new-key error but no cloudFileId in prefs',
@@ -283,7 +370,9 @@ export function listenForSyncEvent(store: AppStore, queryClient: QueryClient) {
             button: {
               title: t('Revert'),
               action: () => {
-                void store.dispatch(closeAndDownloadBudget({ cloudFileId }));
+                void store.dispatch(
+                  closeAndDownloadBudget({ cloudFileId, localId }),
+                );
               },
             },
           };
@@ -393,6 +482,7 @@ export function listenForSyncEvent(store: AppStore, queryClient: QueryClient) {
 
   return () => {
     unlistenUnauthorized();
+    unlistenReachability();
     unlistenSuccess();
   };
 }

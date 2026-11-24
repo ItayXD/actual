@@ -5,34 +5,39 @@ import type {
   balanceTypeOpType,
   CategoryEntity,
   CategoryGroupEntity,
+  CustomReportTagScope,
   DataEntity,
   GroupedEntity,
   IntervalEntity,
   PayeeEntity,
   RuleConditionEntity,
   sortByOpType,
+  TagEntity,
 } from '@actual-app/core/types/models';
 import type { SyncedPrefs } from '@actual-app/core/types/prefs';
 import * as d from 'date-fns';
 
 import {
-  categoryLists,
   getIntervalFormat,
   groupBySelections,
   ReportOptions,
 } from '#components/reports/ReportOptions';
-import type {
-  QueryDataEntity,
-  UncategorizedEntity,
-} from '#components/reports/ReportOptions';
+import type { QueryDataEntity } from '#components/reports/ReportOptions';
+import { resolveTagScope } from '#components/reports/tagScope';
 import type { useSpreadsheet } from '#hooks/useSpreadsheet';
 
 import { calculateLegend } from './calculateLegend';
+import { countFilteredIntervals } from './countFilteredIntervals';
 import { fetchSpreadsheetQueryData } from './fetchSpreadsheetQueryData';
 import { filterEmptyRows } from './filterEmptyRows';
-import { filterHiddenItems } from './filterHiddenItems';
+import {
+  filterHiddenItems,
+  filterReportTransactions,
+} from './filterHiddenItems';
 import { recalculate } from './recalculate';
+import { reportCategoryLists } from './reportCategoryLists';
 import { sortData } from './sortData';
+import { groupQueryDataByTags } from './tagGroups';
 import {
   determineIntervalRange,
   trimIntervalDataToRange,
@@ -57,9 +62,15 @@ export type createCustomSpreadsheetProps = {
   sortByOp?: sortByOpType;
   payees?: PayeeEntity[];
   accounts?: AccountEntity[];
+  tags?: TagEntity[];
+  tagScope?: CustomReportTagScope;
   graphType?: string;
   firstDayOfWeekIdx?: SyncedPrefs['firstDayOfWeekIdx'];
   dateFormat?: SyncedPrefs['dateFormat'];
+};
+
+type CustomSpreadsheetData = DataEntity & {
+  filteredIntervalCount?: number;
 };
 
 export function createCustomSpreadsheet({
@@ -80,41 +91,82 @@ export function createCustomSpreadsheet({
   sortByOp = 'desc',
   payees = [],
   accounts = [],
+  tags = [],
+  tagScope,
   graphType,
   firstDayOfWeekIdx,
   dateFormat,
 }: createCustomSpreadsheetProps) {
-  const [categoryList, categoryGroup] = categoryLists(categories);
-
-  const [groupByList, groupByLabel]: [
-    groupByList: UncategorizedEntity[],
-    groupByLabel: 'category' | 'categoryGroup' | 'payee' | 'account',
-  ] = groupBySelections(groupBy, categoryList, categoryGroup, payees, accounts);
+  const [categoryList, categoryGroup] = reportCategoryLists({
+    categories,
+    conditions,
+    conditionsOp,
+    showOffBudget,
+    showHiddenCategories,
+    showUncategorized,
+  });
+  const [initialGroups, groupByLabel] = groupBySelections(
+    groupBy,
+    categoryList,
+    categoryGroup,
+    payees,
+    accounts,
+  );
+  const transactionConditions = conditions.filter(cond => !cond.customName);
+  const hasDateFilter =
+    ReportOptions.intervalMap.has(interval) &&
+    balanceTypeOp !== 'totalBudgeted' &&
+    transactionConditions.some(cond => cond.field === 'date');
 
   return async (
     spreadsheet: ReturnType<typeof useSpreadsheet>,
-    setData: (data: DataEntity) => void,
+    setData: (data: CustomSpreadsheetData) => void,
   ) => {
-    if (groupByList.length === 0) {
-      setData({
-        data: [],
-        intervalData: [],
-        legend: [],
-        startDate,
-        endDate,
-        totalAssets: 0,
-        totalDebts: 0,
-        netAssets: 0,
-        netDebts: 0,
-        totalTotals: 0,
-        totalBudgeted: 0,
-      });
+    let groupByList = initialGroups;
+    let scopeTagNames: string[] | undefined;
+    const hasGroups = groupBy === 'Tag' || groupByList.length > 0;
+    const intervals =
+      interval === 'Weekly'
+        ? monthUtils.weekRangeInclusive(startDate, endDate, firstDayOfWeekIdx)
+        : monthUtils[
+            ReportOptions.intervalRange.get(interval) || 'rangeInclusive'
+          ](startDate, endDate);
+    const { filters } =
+      hasGroups || hasDateFilter
+        ? await send('make-filters-from-conditions', {
+            conditions: transactionConditions,
+          })
+        : { filters: [] };
+    const filteredIntervalCount = hasDateFilter
+      ? countFilteredIntervals(
+          startDate,
+          endDate,
+          interval,
+          intervals,
+          filters,
+          conditionsOp,
+        )
+      : undefined;
+    const emptyData: CustomSpreadsheetData = {
+      data: [],
+      intervalData: [],
+      legend: [],
+      startDate,
+      endDate,
+      totalAssets: 0,
+      totalDebts: 0,
+      netAssets: 0,
+      netDebts: 0,
+      totalTotals: 0,
+      totalBudgeted: 0,
+      filteredIntervalCount,
+    };
+
+    if (!hasGroups) {
+      setData(emptyData);
       return;
     }
 
-    const { filters } = await send('make-filters-from-conditions', {
-      conditions: conditions.filter(cond => !cond.customName),
-    });
     const conditionsOpKey = conditionsOp === 'or' ? '$or' : '$and';
 
     let assets: QueryDataEntity[];
@@ -132,7 +184,37 @@ export function createCustomSpreadsheet({
       conditionsOpKey,
       filters,
       budgetType,
+      groupBy,
     }));
+
+    if (groupBy === 'Tag') {
+      const resolvedScope = resolveTagScope(tags, tagScope);
+      scopeTagNames = resolvedScope.map(tag => tag.tag);
+      const groupedQueryData = groupQueryDataByTags({
+        assets: filterReportTransactions(
+          assets,
+          showOffBudget,
+          showHiddenCategories,
+          showUncategorized,
+        ),
+        debts: filterReportTransactions(
+          debts,
+          showOffBudget,
+          showHiddenCategories,
+          showUncategorized,
+        ),
+        tags: resolvedScope,
+        showEmpty,
+      });
+      assets = groupedQueryData.assets;
+      debts = groupedQueryData.debts;
+      groupByList = groupedQueryData.groups;
+    }
+
+    if (groupByList.length === 0) {
+      setData(emptyData);
+      return;
+    }
 
     if (interval === 'Weekly' && balanceTypeOp !== 'totalBudgeted') {
       debts = debts.map(d => {
@@ -149,12 +231,16 @@ export function createCustomSpreadsheet({
       });
     }
 
-    const intervals =
-      interval === 'Weekly'
-        ? monthUtils.weekRangeInclusive(startDate, endDate, firstDayOfWeekIdx)
-        : monthUtils[
-            ReportOptions.intervalRange.get(interval) || 'rangeInclusive'
-          ](startDate, endDate);
+    if (interval === 'Quarterly' && balanceTypeOp !== 'totalBudgeted') {
+      debts = debts.map(d => ({
+        ...d,
+        date: monthUtils.quarterFromDate(d.date),
+      }));
+      assets = assets.map(d => ({
+        ...d,
+        date: monthUtils.quarterFromDate(d.date),
+      }));
+    }
 
     let totalAssets = 0;
     let totalDebts = 0;
@@ -336,6 +422,8 @@ export function createCustomSpreadsheet({
       // the underlying dataset when `balanceTypeOp === 'totalBudgeted'`.
       totalTotals: totalAssets + totalDebts,
       totalBudgeted: totalAssets + totalDebts,
+      scopeTagNames,
+      filteredIntervalCount,
     });
   };
 }

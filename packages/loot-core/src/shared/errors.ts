@@ -54,7 +54,18 @@ function getUnsafeZipError(meta: UnsafeZipMeta): string {
 // plain English strings. User-facing, translated equivalents live in the
 // desktop-client (`src/util/error.ts`).
 
-function isDatabaseSchemaMismatch(meta?: unknown): boolean {
+// A SQLite error meaning a query referenced a table or column that
+// doesn't exist in this database's schema. SQLite reports a missing
+// column as "no such column" in UPDATE/SELECT statements but as "has no
+// column named" in INSERT statements.
+export function isMissingSchemaError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /no such (table|column)|has no column named/i.test(error.message)
+  );
+}
+
+export function isDatabaseSchemaMismatch(meta?: unknown): boolean {
   if (
     meta &&
     typeof meta === 'object' &&
@@ -64,7 +75,10 @@ function isDatabaseSchemaMismatch(meta?: unknown): boolean {
     'message' in meta.error &&
     typeof meta.error.message === 'string'
   ) {
-    return /no such (column|table)/i.test(meta.error.message);
+    // Narrower than `isMissingSchemaError`: sync defers the INSERT form
+    // ("has no column named"), so one reaching the UI means local
+    // damage, not version skew
+    return /no such (table|column)/i.test(meta.error.message);
   }
   return false;
 }
@@ -94,6 +108,8 @@ export function getDownloadError({
     case 'invalid-zip-file':
     case 'invalid-meta-file':
       return 'Downloaded file is invalid, sorry! Visit https://actualbudget.org/contact/ for support.';
+    case 'mismatched-cloud-file':
+      return 'The selected local budget does not match this cloud file. It has not been replaced.';
     case 'zip-too-large': {
       const zipMeta = getUnsafeZipMeta(meta);
       if (zipMeta) {
@@ -145,8 +161,18 @@ export function getSyncError(error: string, id: string, meta?: unknown) {
     return getSchemaMismatchError();
   } else if (error === 'budget-not-found') {
     return `Budget "${id}" not found. Check the ID of your budget in the Advanced section of the settings page.`;
+  } else if (error === 'budget-in-use') {
+    return `Budget "${id}" is already open in another tab or window of this browser. Close it there and try again.`;
+  } else if (error === 'storage-migration-failed') {
+    return `Moving budget "${id}" to the new browser storage failed. Nothing was deleted; open the budget again to retry.`;
+  } else if (error === 'storage-unavailable') {
+    return `Budget "${id}" is in storage this browser cannot reach right now. Nothing was deleted; reload the page and try again.`;
+  } else if (error === 'storage-lost') {
+    return `This browser no longer has the local copy of budget "${id}". Browsers can discard it, mostly in private windows. Delete this copy and download the budget again, or restore it from a backup.`;
   } else if (error === 'clock-drift') {
     return 'Failed to sync because your device time differs too much from the server. Please check your device time settings and ensure they are correct.';
+  } else if (error === 'out-of-sync') {
+    return `The local copy of budget "${id}" is out of sync with the server. Delete the "${id}" folder from your data directory and download the budget again (any changes not yet synced to the server will be lost).`;
   } else {
     return `We had an unknown problem opening "${id}".`;
   }

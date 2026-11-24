@@ -1,4 +1,8 @@
-import { getUnsafeZipMeta, toMB } from '@actual-app/core/shared/errors';
+import {
+  getUnsafeZipMeta,
+  isDatabaseSchemaMismatch,
+  toMB,
+} from '@actual-app/core/shared/errors';
 import type { UnsafeZipMeta } from '@actual-app/core/shared/errors';
 import { t } from 'i18next';
 
@@ -85,21 +89,6 @@ export function getUploadError({ reason, meta }: ErrorWithMeta) {
   }
 }
 
-function isDatabaseSchemaMismatch(meta?: unknown): boolean {
-  if (
-    meta &&
-    typeof meta === 'object' &&
-    'error' in meta &&
-    meta.error &&
-    typeof meta.error === 'object' &&
-    'message' in meta.error &&
-    typeof meta.error.message === 'string'
-  ) {
-    return /no such (column|table)/i.test(meta.error.message);
-  }
-  return false;
-}
-
 function getSchemaMismatchError() {
   return t(
     'This budget could not be loaded because it uses a newer database schema than this version of Actual supports. Make sure you are using the latest version, then try again.',
@@ -128,6 +117,10 @@ export function getDownloadError({
     case 'invalid-meta-file':
       return t(
         'Downloaded file is invalid, sorry! Visit https://actualbudget.org/contact/ for support.',
+      );
+    case 'mismatched-cloud-file':
+      return t(
+        'The selected local budget does not match this cloud file. It has not been replaced.',
       );
     case 'zip-too-large': {
       const zipMeta = getUnsafeZipMeta(meta);
@@ -201,6 +194,26 @@ export function getSyncError(error: string, id: string) {
   } else if (error === 'clock-drift') {
     return t(
       'Failed to sync because your device time differs too much from the server. Please check your device time settings and ensure they are correct.',
+    );
+  } else if (error === 'budget-in-use') {
+    return t(
+      'Budget "{{id}}" is already open in another tab or window of this browser. Close it there and try again.',
+      { id },
+    );
+  } else if (error === 'storage-migration-failed') {
+    return t(
+      'Moving budget "{{id}}" to the new browser storage failed. Nothing was deleted; open the budget again to retry.',
+      { id },
+    );
+  } else if (error === 'storage-unavailable') {
+    return t(
+      'Budget "{{id}}" is in storage this browser cannot reach right now. Nothing was deleted; reload the page and try again.',
+      { id },
+    );
+  } else if (error === 'storage-lost') {
+    return t(
+      'This browser no longer has the local copy of budget "{{id}}". Browsers can discard it, mostly in private windows. If the budget is on a sync server, delete this copy and download it again; otherwise restore it from a backup.',
+      { id },
     );
   } else {
     return t('We had an unknown problem opening "{{id}}".', { id });

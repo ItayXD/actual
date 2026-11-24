@@ -44,6 +44,7 @@ const ALWAYS_SCROLL_CLASS = css({
     minHeight: 24,
     borderRadius: 30,
     backgroundClip: 'padding-box',
+    // oxlint-disable-next-line actual/no-color-literals
     border: '2px solid rgba(0, 0, 0, 0)',
     backgroundColor: theme.tableBorder,
   },
@@ -185,7 +186,7 @@ export function BudgetAutomationsBody({
         }}
       >
         <View style={{ minWidth: 0 }}>
-          <Text style={{ fontSize: 12, color: theme.pageTextLight }}>
+          <Text size="small" style={{ color: theme.pageTextLight }}>
             <Trans>Budget automation</Trans>
           </Text>
           <Text

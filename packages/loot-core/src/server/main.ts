@@ -4,6 +4,7 @@ import * as connection from '#platform/server/connection';
 import * as fs from '#platform/server/fs';
 import { logger, setVerboseMode } from '#platform/server/log';
 import * as sqlite from '#platform/server/sqlite';
+import type { StorageBackend } from '#platform/server/sqlite';
 import { q } from '#shared/query';
 import { amountToInteger, integerToAmount } from '#shared/util';
 import type { Handlers } from '#types/handlers';
@@ -20,7 +21,7 @@ import { app as dashboardApp } from './dashboard/app';
 import * as db from './db';
 import * as encryption from './encryption';
 import { app as encryptionApp } from './encryption/app';
-import { withErrorCode } from './errors';
+import { DocumentDirError, withErrorCode } from './errors';
 import { app as filtersApp } from './filters/app';
 import { app as forecastApp } from './forecast/app';
 import { app as formulasApp } from './formulas/app';
@@ -37,6 +38,7 @@ import { app as rulesApp } from './rules/app';
 import { app as schedulesApp } from './schedules/app';
 import { getServer, setServer } from './server-config';
 import { app as spreadsheetApp } from './spreadsheet/app';
+import { app as storageApp } from './storage/app';
 import { fullSync, setSyncingMode } from './sync';
 import { app as syncApp } from './sync/app';
 import { app as tagsApp } from './tags/app';
@@ -153,6 +155,7 @@ app.combine(
   budgetFilesApp,
   encryptionApp,
   tagsApp,
+  storageApp,
   insightsApp,
 );
 
@@ -184,14 +187,59 @@ async function setupDocumentsDir() {
     documentDir = getDefaultDocumentDir();
   }
 
-  await ensureExists(documentDir);
+  try {
+    await ensureExists(documentDir);
+    await ensureUsable(documentDir);
+  } catch (error) {
+    // Surface the exact folder and the filesystem error so the desktop app
+    // can show the user what is blocking startup (e.g. Windows Controlled
+    // Folder Access) instead of hanging on the loading screen.
+    throw new DocumentDirError(documentDir, error);
+  }
   fs._setDocumentDir(documentDir);
 }
 
-export async function initApp(isDev, socketName) {
-  await sqlite.init();
+// Existence alone isn't enough: the folder may be there but unreadable (no
+// permissions) or unwritable (Windows Controlled Folder Access blocks writes
+// without changing permissions). Fail fast here rather than half-way through
+// loading budgets.
+async function ensureUsable(dir) {
+  await fs.listDir(dir);
+
+  // Unique per run so we never touch (let alone delete) something the user
+  // put there; only the directory this call created is removed.
+  const probeName = `.actual-write-test-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
+  const probeDir = fs.join(dir, probeName);
+  await fs.mkdir(probeDir);
+  await fs.removeDir(probeDir);
+}
+
+export async function initApp(
+  isDev,
+  socketName,
+  {
+    storageBackend = 'legacy',
+    isSharedArrayBufferOverrideEnabled = false,
+  }: {
+    storageBackend?: StorageBackend;
+    isSharedArrayBufferOverrideEnabled?: boolean;
+  } = {},
+) {
+  const storage = await sqlite.init({ storage: storageBackend });
+  // Only the legacy engine (absurd-sql) needs SharedArrayBuffer, and
+  // whether it runs is known only now: data already moved to the new
+  // storage wins over the flag
+  if (
+    storage === 'legacy' &&
+    typeof SharedArrayBuffer === 'undefined' &&
+    !isSharedArrayBufferOverrideEnabled
+  ) {
+    throw new Error('shared-array-buffer-missing');
+  }
   asyncStorage.init();
-  await fs.init();
+  await fs.init({ storage });
   await setupDocumentsDir();
 
   const keysStr = await asyncStorage.getItem('encrypt-keys');
@@ -232,6 +280,12 @@ export async function initApp(isDev, socketName) {
 }
 
 type BaseInitConfig = {
+  /**
+   * Browser build only: which storage holds budgets. `opfs` uses the
+   * origin private file system, falling back to `memory-idb` where
+   * unavailable.
+   */
+  storageBackend?: StorageBackend;
   /**
    * Directory where budget data is stored. In Node this is a directory on
    * disk (defaults to the current working directory) and must already exist.
@@ -285,9 +339,9 @@ export async function init(config: InitConfig) {
     serverURL = process.env.ACTUAL_SERVER_URL;
   }
 
-  await sqlite.init();
+  const storage = await sqlite.init({ storage: config?.storageBackend });
   asyncStorage.init({ persist: false });
-  await fs.init();
+  await fs.init({ storage });
   fs._setDocumentDir(dataDir || process.cwd());
 
   if (serverURL) {

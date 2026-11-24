@@ -7,6 +7,14 @@ import * as asyncStorage from '#platform/server/asyncStorage';
 import * as connection from '#platform/server/connection';
 import * as fs from '#platform/server/fs';
 import { logger } from '#platform/server/log';
+import {
+  BudgetInUseError,
+  flushSqliteStorage,
+  hasMigratedSqliteFiles,
+  StorageLostError,
+  StorageMigrationError,
+  StorageUnavailableError,
+} from '#platform/server/sqlite';
 import { createApp } from '#server/app';
 import * as budget from '#server/budget/base';
 import * as cloudStorage from '#server/cloud-storage';
@@ -23,9 +31,12 @@ import * as sheet from '#server/sheet';
 import {
   clearFullSyncTimeout,
   initialFullSync,
+  resumeFullSync,
   setSyncingMode,
+  stopFullSync,
 } from '#server/sync';
 import * as syncMigrations from '#server/sync/migrate';
+import { replayPendingMessages } from '#server/sync/replay';
 import * as rules from '#server/transactions/transaction-rules';
 import { clearUndo } from '#server/undo';
 import { updateVersion } from '#server/update';
@@ -145,10 +156,46 @@ async function getRemoteFiles() {
 }
 
 async function resetBudgetCache() {
-  // Recomputing everything will update the cache
-  await sheet.loadUserBudgets(db);
-  sheet.get().recomputeAll();
-  await sheet.waitOnSpreadsheet();
+  const spreadsheet = sheet.get();
+
+  // Hold the cache dirty for the whole reset so an interrupted one doesn't
+  // leave a half-written cache looking clean.
+  spreadsheet.startCacheBarrier();
+
+  try {
+    sheet.clearCache();
+
+    let seededCells: string[] = [];
+
+    // One transaction around the whole reset. `loadUserBudgets` would
+    // otherwise close its own, queueing a computation pass over everything
+    // downstream of the budget inputs that `recomputeAll` then repeats.
+    spreadsheet.startTransaction();
+    try {
+      await sheet.loadUserBudgets(db);
+
+      // Seeding the spend totals from a single grouped query keeps the
+      // recompute from running a `SELECT SUM(amount)` per category per month.
+      seededCells = await budget.reseedSumAmounts([
+        ...spreadsheet.meta().createdMonths,
+      ]);
+
+      // Recomputing everything will update the cache
+      spreadsheet.recomputeAll(new Set(seededCells));
+    } finally {
+      // A transaction left open would stop the spreadsheet from queueing any
+      // further computations, and make every later `waitOnSpreadsheet` throw.
+      spreadsheet.endTransaction();
+    }
+
+    // The seeded cells were loaded rather than computed, so they aren't part
+    // of the computation queue that normally gets cached.
+    spreadsheet.saveCachedCells(seededCells);
+
+    await sheet.waitOnSpreadsheet();
+  } finally {
+    spreadsheet.endCacheBarrier();
+  }
 }
 
 async function uploadBudget({ id }: { id?: Budget['id'] } = {}): Promise<{
@@ -182,12 +229,17 @@ async function uploadBudget({ id }: { id?: Budget['id'] } = {}): Promise<{
 
 async function downloadBudget({
   cloudFileId,
+  localId,
 }: {
   cloudFileId: Budget['cloudFileId'];
+  localId?: Budget['id'];
 }): Promise<{ id?: Budget['id']; error?: { reason: string; meta?: unknown } }> {
   let result;
   try {
-    result = await cloudStorage.download(cloudFileId);
+    if (localId) {
+      await closeBudget();
+    }
+    result = await cloudStorage.download(cloudFileId, localId);
   } catch (e) {
     if (e.type === 'FileDownloadError') {
       if (e.reason === 'file-exists' && e.meta.id) {
@@ -224,7 +276,29 @@ async function syncBudget() {
   return result;
 }
 
+// The load in progress: a second request for the same budget waits for it.
+// Prefs are set before the database opens, so the shortcut in
+// `loadBudgetOnce` would otherwise answer a tab that joins through the
+// coordinator while the storage is still moving the budget over
+let loading: {
+  id: Budget['id'];
+  result: ReturnType<typeof loadBudgetOnce>;
+} | null = null;
+
 async function loadBudget({ id }: { id: Budget['id'] }) {
+  if (loading?.id === id) {
+    return loading.result;
+  }
+  const result = loadBudgetOnce(id).finally(() => {
+    if (loading?.result === result) {
+      loading = null;
+    }
+  });
+  loading = { id, result };
+  return result;
+}
+
+async function loadBudgetOnce(id: Budget['id']) {
   const currentPrefs = prefs.getPrefs();
 
   if (currentPrefs) {
@@ -237,9 +311,7 @@ async function loadBudget({ id }: { id: Budget['id'] }) {
     }
   }
 
-  const res = await _loadBudget(id);
-
-  return res;
+  return _loadBudget(id);
 }
 
 async function createDemoBudget() {
@@ -256,6 +328,15 @@ async function createDemoBudget() {
 }
 
 async function closeBudget() {
+  await stopFullSync();
+  try {
+    return await unloadBudget();
+  } finally {
+    resumeFullSync();
+  }
+}
+
+async function unloadBudget() {
   captureBreadcrumb({ message: 'Closing budget' });
   resetFormulaPreferencesCache();
 
@@ -267,6 +348,13 @@ async function closeBudget() {
   await mainApp.stopServices();
 
   db.closeDatabase();
+  // The IndexedDB fallback writes lazily: the budget is closed only once
+  // its last write is in
+  try {
+    await flushSqliteStorage();
+  } catch (error) {
+    captureException(error);
+  }
 
   try {
     await asyncStorage.setItem('lastBudget', '');
@@ -540,7 +628,18 @@ async function _loadBudget(id: Budget['id']): Promise<{
     | 'loading-budget'
     | 'out-of-sync-migrations'
     | 'out-of-sync-data'
-    | 'opening-budget';
+    | 'opening-budget'
+    | 'budget-in-use'
+    | 'storage-migration-failed'
+    | 'storage-unavailable'
+    | 'storage-lost';
+  // What the user calls the budget, where it got as far as its
+  // preferences, for the client to say which one this is about
+  budgetName?: string;
+  // With `storage-migration-failed`: whether the budget could be opened
+  // on the previous storage engine instead, or null where that could not
+  // be found out
+  canKeepPreviousStorage?: boolean | null;
 }> {
   let dir: string;
   try {
@@ -559,15 +658,50 @@ async function _loadBudget(id: Budget['id']): Promise<{
     return { error: 'budget-not-found' };
   }
 
+  // Kept from this load's own preferences: the ones in memory are
+  // whichever budget's were loaded last
+  let budgetName: string | undefined;
   try {
     resetFormulaPreferencesCache();
-    await prefs.loadPrefs(id);
+    ({ budgetName } = await prefs.loadPrefs(id));
     await db.openDatabase(id);
   } catch (e) {
     captureBreadcrumb({ message: 'Error loading budget ' + id });
-    captureException(e);
     await closeBudget();
-    return { error: 'opening-budget' };
+    // Expected conditions on the web storage, not bugs
+    if (e instanceof BudgetInUseError) {
+      return { error: 'budget-in-use', budgetName };
+    }
+    if (e instanceof StorageMigrationError) {
+      logger.error('Storage migration failed', e);
+      return {
+        error: 'storage-migration-failed',
+        budgetName,
+        // Offered while no other budget lives in the new storage: going
+        // back moves every budget there back first, which with others
+        // moved is left to the setting. This budget's own row does not
+        // count; it has one when it was being taken over from the
+        // fallback store, and goes back like any other. A lookup that
+        // fails says neither
+        canKeepPreviousStorage: await hasMigratedSqliteFiles(
+          undefined,
+          fs.join(dir, 'db.sqlite'),
+        ).then(
+          hasOthers => !hasOthers,
+          () => null,
+        ),
+      };
+    }
+    if (e instanceof StorageUnavailableError) {
+      logger.error('Storage unavailable', e);
+      return { error: 'storage-unavailable', budgetName };
+    }
+    if (e instanceof StorageLostError) {
+      logger.error('Storage lost', e);
+      return { error: 'storage-lost', budgetName };
+    }
+    captureException(e);
+    return { error: 'opening-budget', budgetName };
   }
 
   // Older versions didn't tag the file with the current user, so do
@@ -590,11 +724,25 @@ async function _loadBudget(id: Budget['id']): Promise<{
       captureException(e);
       logger.info('Error updating budget ' + id, e);
       logger.log('Error updating budget', e);
-      result = { error: 'loading-budget' };
+      result = { error: 'loading-budget', budgetName };
     }
 
     await closeBudget();
     return result;
+  }
+
+  try {
+    // Apply sync messages deferred from a newer app version, now that
+    // migrations have run. Skipped without a sync server: serverless
+    // edits aren't in the crdt log, so replay couldn't tell whether a
+    // pending value is stale.
+    if (getServer()) {
+      replayPendingMessages();
+    }
+  } catch (e) {
+    // Failing to replay shouldn't block loading the budget; the
+    // messages stay pending
+    captureException(e);
   }
 
   await db.loadClock();

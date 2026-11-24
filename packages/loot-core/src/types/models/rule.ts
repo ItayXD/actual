@@ -1,3 +1,5 @@
+import type { ObjectExpression } from '#shared/query';
+
 import type { RecurConfig, ScheduleEntity } from './schedule';
 
 export type NewRuleEntity = {
@@ -40,7 +42,9 @@ type BaseConditionEntity<
   value: Op extends 'oneOf' | 'notOneOf'
     ? Array<FieldValueTypes[Field]>
     : Op extends 'isbetween'
-      ? { num1: number; num2: number }
+      ? Field extends 'date'
+        ? { num1: string; num2: string }
+        : { num1: number; num2: number }
       : FieldValueTypes[Field];
   options?: {
     inflow?: boolean;
@@ -51,7 +55,7 @@ type BaseConditionEntity<
   conditionsOp?: 'and' | 'or';
   type?: 'id' | 'boolean' | 'date' | 'number' | 'string';
   customName?: string;
-  queryFilter?: Record<string, { $oneof: string[] }>;
+  queryFilter?: ObjectExpression;
 };
 
 export type RuleConditionEntity =

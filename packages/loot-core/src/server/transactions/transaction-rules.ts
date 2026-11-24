@@ -39,7 +39,7 @@ import {
 } from '#shared/months';
 import { q } from '#shared/query';
 import { getApproxNumberThreshold, sortNumbers } from '#shared/rules';
-import { extractTagsForFilter } from '#shared/tags';
+import { extractTagsForFilter, makeTagAqlRegex } from '#shared/tags';
 import { ungroupTransaction } from '#shared/transactions';
 import { fastSetMerge, partitionByField } from '#shared/util';
 import type {
@@ -317,7 +317,19 @@ export async function getAllRuleIdsFromSchedules(
   return ruleIds;
 }
 
+export async function getCompletedScheduleRuleIds(): Promise<Set<string>> {
+  const rows = await db.all<Pick<db.DbSchedule, 'rule'>>(
+    'SELECT rule FROM schedules WHERE completed = 1 AND tombstone = 0',
+  );
+
+  return new Set(
+    rows.map(r => r.rule).filter((rule): rule is string => !!rule),
+  );
+}
+
 // Runner
+const NULLABLE_RULE_FIELDS = ['payee', 'category'] as const;
+
 export async function runRules(
   trans,
   accounts: Map<string, db.DbAccount> | null = null,
@@ -333,8 +345,47 @@ export async function runRules(
     accountsMap = accounts;
   }
 
-  let finalTrans = await prepareTransactionForRules({ ...trans }, accountsMap);
+  const rules = rankRules(
+    fastSetMerge(
+      firstcharIndexer.getApplicableRules(trans),
+      payeeIndexer.getApplicableRules(trans),
+    ),
+  );
+
+  // Bank sync and the client can leave `payee` or `category` out entirely
+  // when the transaction has none. A condition never matches a missing
+  // field, so a "payee is nothing" rule would silently skip such a
+  // transaction. Match against null instead, and drop the field again
+  // afterwards so the returned shape matches the input.
+  const missingNullableFields = NULLABLE_RULE_FIELDS.filter(
+    field => trans[field] === undefined,
+  );
+  const normalizedTrans = { ...trans };
+  for (const field of missingNullableFields) {
+    normalizedTrans[field] = null;
+  }
+
+  let finalTrans = await prepareTransactionForRules(
+    normalizedTrans,
+    accountsMap,
+    { includeBalance: false },
+  );
   let lastCategoryIdForGroup: string | null = finalTrans.category ?? null;
+
+  // The running balance is a query over every earlier transaction in
+  // the account, so fetch it at most once, and only for a rule that is
+  // about to run and actually reads it. `rules` is only the candidates
+  // from the indexers, so checking their actions up front isn't enough.
+  let hasBalance = false;
+  async function ensureBalanceFor(rule: { actions: Action[] }) {
+    if (!hasBalance && trans.account && actionsReferenceBalance(rule.actions)) {
+      finalTrans.balance = await getRunningBalanceBeforeTransaction(
+        trans,
+        trans.account,
+      );
+      hasBalance = true;
+    }
+  }
 
   let scheduleRuleID = '';
   // Check if a schedule is attached to this transaction and if so get the rule ID attached to that schedule.
@@ -348,12 +399,9 @@ export async function runRules(
   const RuleIdsLinkedToSchedules =
     await getAllRuleIdsFromSchedules(scheduleRuleID);
 
-  const rules = rankRules(
-    fastSetMerge(
-      firstcharIndexer.getApplicableRules(trans),
-      payeeIndexer.getApplicableRules(trans),
-    ),
-  );
+  // Completed schedules are kept around for reference, so their rules must
+  // not link new transactions that happen to match.
+  const completedScheduleRuleIds = await getCompletedScheduleRuleIds();
 
   const formulaStrings = rules.flatMap(rule =>
     collectFormulasFromActions(rule.actions),
@@ -369,6 +417,7 @@ export async function runRules(
     if (scheduleRuleID !== '') {
       if (rules[i].id === scheduleRuleID) {
         // bypass condition checking to run the rule even if the transaction date falls outside of the schedule's date range.
+        await ensureBalanceFor(rules[i]);
         const changes = rules[i].execActions(finalTrans);
         finalTrans = Object.assign({}, finalTrans, changes);
         await resolvePayeeNameForRules(finalTrans);
@@ -381,16 +430,33 @@ export async function runRules(
         continue;
       } else {
         // if a rule is not linked to a schedule, run it.
-        finalTrans = rules[i].apply(finalTrans);
+        if (rules[i].evalConditions(finalTrans)) {
+          await ensureBalanceFor(rules[i]);
+          finalTrans = Object.assign(
+            {},
+            finalTrans,
+            rules[i].execActions(finalTrans),
+          );
+        }
         await resolvePayeeNameForRules(finalTrans);
         lastCategoryIdForGroup = await refreshCategoryGroupIfChanged(
           finalTrans,
           lastCategoryIdForGroup,
         );
       }
+    } else if (completedScheduleRuleIds.has(rules[i].id)) {
+      // Completed schedules must not link new transactions.
+      continue;
     } else {
       // if there is no scheduleRuleID then just run all rules.
-      finalTrans = rules[i].apply(finalTrans);
+      if (rules[i].evalConditions(finalTrans)) {
+        await ensureBalanceFor(rules[i]);
+        finalTrans = Object.assign(
+          {},
+          finalTrans,
+          rules[i].execActions(finalTrans),
+        );
+      }
       await resolvePayeeNameForRules(finalTrans);
       lastCategoryIdForGroup = await refreshCategoryGroupIfChanged(
         finalTrans,
@@ -399,7 +465,13 @@ export async function runRules(
     }
   }
 
-  return await finalizeTransactionForRules(finalTrans);
+  const result = await finalizeTransactionForRules(finalTrans);
+  for (const field of missingNullableFields) {
+    if (result[field] === null) {
+      delete result[field];
+    }
+  }
+  return result;
 }
 
 function conditionSpecialCases(cond: Condition | null): Condition | null {
@@ -600,13 +672,40 @@ export function conditionsToAQL(
       case 'isNot':
         return apply(field, '$ne', value);
 
-      case 'isbetween':
-        // This operator is only applicable to the specific `between`
-        // number type so we don't use `apply`
+      case 'isbetween': {
         const [low, high] = sortNumbers(value.num1, value.num2);
+        if (type === 'number') {
+          // The sign handling mirrors `Condition.eval`, which only rejects
+          // the opposite sign and so keeps a zero amount inside either an
+          // outflow or an inflow range. Outflows are negated first, so both
+          // bounds read as positive magnitudes.
+          if (options?.outflow) {
+            return {
+              $and: [
+                { amount: { $lte: 0 } },
+                { [field]: { $transform: '$neg', $gte: low } },
+                { [field]: { $transform: '$neg', $lte: high } },
+              ],
+            };
+          }
+          if (options?.inflow) {
+            return {
+              $and: [
+                { amount: { $gte: 0 } },
+                { [field]: { $gte: low } },
+                { [field]: { $lte: high } },
+              ],
+            };
+          }
+          return {
+            $and: [{ amount: { $gte: low } }, { amount: { $lte: high } }],
+          };
+        }
+        // Dates carry plain `YYYY-MM-DD` bounds, which compare directly
         return {
           [field]: [{ $gte: low }, { $lte: high }],
         };
+      }
       case 'contains':
         // Running contains with id will automatically reach into
         // the `name` of the referenced table and do a string match
@@ -645,13 +744,7 @@ export function conditionsToAQL(
         }
 
         return {
-          $and: tagValues.map(v => {
-            const escapedTag = v
-              .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-              .replace(/\\\$/g, '[$]'); // Use '[$]' instead of '\$' so AQL string unescaping doesn't turn it into a bare '$' end-of-string anchor
-            const pattern = `(?<!#)${escapedTag}([\\s#]|$)`;
-            return apply(field, '$regexp', pattern);
-          }),
+          $and: tagValues.map(v => apply(field, '$regexp', makeTagAqlRegex(v))),
         };
       }
 
@@ -661,13 +754,7 @@ export function conditionsToAQL(
           return { id: null };
         }
         return {
-          $or: tagValues.map(v => {
-            const escapedTag = v
-              .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-              .replace(/\\\$/g, '[$]'); // Use '[$]' instead of '\$' so AQL string unescaping doesn't turn it into a bare '$' end-of-string anchor
-            const pattern = `(?<!#)${escapedTag}([\\s#]|$)`;
-            return apply(field, '$regexp', pattern);
-          }),
+          $or: tagValues.map(v => apply(field, '$regexp', makeTagAqlRegex(v))),
         };
       }
 
@@ -755,9 +842,10 @@ export async function applyActions(
 
   const accounts: db.DbAccount[] = await db.getAccounts();
   const accountsMap = new Map(accounts.map(account => [account.id, account]));
+  const includeBalance = actionsReferenceBalance(parsedActions);
   const transactionsForRules = await Promise.all(
-    transactions.map(transactions =>
-      prepareTransactionForRules(transactions, accountsMap),
+    transactions.map(transaction =>
+      prepareTransactionForRules(transaction, accountsMap, { includeBalance }),
     ),
   );
 
@@ -982,8 +1070,14 @@ export async function updateCategoryRules(transactions) {
             });
           }
         }
-      } else {
-        // No existing rules, so create one
+      } else if (
+        !getOneOfSetterRules(null, 'payee', 'category', {
+          condValue: payeeId,
+          actionValue: category,
+        }).next().value
+      ) {
+        // No existing rules (and no "one of" rule that already sets this
+        // category for the payee), so create one
         const newRule = new Rule({
           stage: null,
           conditionsOp: 'and',
@@ -1005,7 +1099,14 @@ export type TransactionForRules = TransactionEntity & {
   /** The transaction's category's group id; see prepareTransactionForRules */
   category_group?: string;
   parent_amount?: number;
-  /** Prefetched cent balances for BALANCE_OF("…") in rule formulas; cleared in finalize */
+  parent_notes?: string;
+  parent_imported_payee?: string;
+  parent_payee?: string;
+  parent_account?: string;
+  /**
+   * Prefetched integer balances for BALANCE_OF("…") in rule formulas; converted
+   * to amounts at the formula boundary in executeFormulaSync, cleared in finalize
+   */
   _balanceOfPrefetched?: Map<string, number>;
 };
 
@@ -1080,9 +1181,28 @@ export async function prefetchBalanceOfForTransaction(
   return map;
 }
 
+const BALANCE_VARIABLE = /\bbalance\b/i;
+
+// Whether any of these actions can read the transaction's running
+// balance: Handlebars templates via `{{balance}}` and formulas via the
+// `balance` variable. `BALANCE_OF(...)` is a different, prefetched value
+// and does not count.
+export function actionsReferenceBalance(
+  actions: Array<{ options?: { template?: string; formula?: string } }>,
+): boolean {
+  return actions.some(action => {
+    const { template, formula } = action.options ?? {};
+    return (
+      (typeof template === 'string' && BALANCE_VARIABLE.test(template)) ||
+      (typeof formula === 'string' && BALANCE_VARIABLE.test(formula))
+    );
+  });
+}
+
 export async function prepareTransactionForRules(
   trans: TransactionEntity,
   accounts: Map<string, db.DbAccount> | null = null,
+  { includeBalance = true }: { includeBalance?: boolean } = {},
 ): Promise<TransactionForRules> {
   const r: TransactionForRules = { ...trans };
   if (trans.payee) {
@@ -1103,7 +1223,12 @@ export async function prepareTransactionForRules(
       r._account_name = r._account?.name || '';
     }
 
-    r.balance = await getRunningBalanceBeforeTransaction(trans, trans.account);
+    if (includeBalance) {
+      r.balance = await getRunningBalanceBeforeTransaction(
+        trans,
+        trans.account,
+      );
+    }
   }
 
   if (trans.category) {
@@ -1197,8 +1322,16 @@ export async function finalizeTransactionForRules(
     delete trans._balanceOfPrefetched;
   }
 
-  if ('parent_amount' in trans) {
-    delete trans.parent_amount;
+  for (const field of [
+    'parent_amount',
+    'parent_notes',
+    'parent_imported_payee',
+    'parent_payee',
+    'parent_account',
+  ] as const) {
+    if (field in trans) {
+      delete trans[field];
+    }
   }
 
   if (trans.subtransactions?.length) {
@@ -1211,8 +1344,16 @@ export async function finalizeTransactionForRules(
         delete stx._balanceOfPrefetched;
       }
 
-      if ('parent_amount' in stx) {
-        delete stx.parent_amount;
+      for (const field of [
+        'parent_amount',
+        'parent_notes',
+        'parent_imported_payee',
+        'parent_payee',
+        'parent_account',
+      ] as const) {
+        if (field in stx) {
+          delete stx[field];
+        }
       }
     });
   }
