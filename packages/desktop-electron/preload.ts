@@ -11,6 +11,20 @@ import type {
 const { version: VERSION, isDev: IS_DEV }: GetBootstrapDataPayload =
   ipcRenderer.sendSync('get-bootstrap-data');
 
+// fork: updates come from this fork's releases (fork-updater.ts) and are
+// surfaced through upstream's web "update ready" hooks below.
+let isForkUpdateReady = false;
+const forkUpdateReady = new Promise<void>(resolve => {
+  const markReady = () => {
+    isForkUpdateReady = true;
+    resolve();
+  };
+  ipcRenderer.on('fork-update-ready', markReady);
+  void ipcRenderer.invoke('fork-update-status').then(version => {
+    if (version) markReady();
+  });
+});
+
 contextBridge.exposeInMainWorld('Actual', {
   IS_DEV,
   ACTUAL_VERSION: VERSION,
@@ -75,12 +89,8 @@ contextBridge.exposeInMainWorld('Actual', {
     ipcRenderer.on(type, handler);
   },
 
-  // No auto-updates in the desktop app
-  isUpdateReadyForDownload: () => false,
-  waitForUpdateReadyForDownload: () =>
-    new Promise<void>(() => {
-      // This is used in browser environment; do nothing in electron
-    }),
+  isUpdateReadyForDownload: () => isForkUpdateReady,
+  waitForUpdateReadyForDownload: () => forkUpdateReady,
 
   getServerSocket: async () => {
     return null;
@@ -109,7 +119,5 @@ contextBridge.exposeInMainWorld('Actual', {
     throw new Error('Reload not implemented in electron app');
   },
 
-  applyAppUpdate: async () => {
-    throw new Error('applyAppUpdate not implemented in electron app');
-  },
+  applyAppUpdate: () => ipcRenderer.invoke('fork-update-apply'),
 } satisfies typeof global.Actual);

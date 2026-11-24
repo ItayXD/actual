@@ -23,3 +23,7 @@ packages/desktop-client/src/components/sidebar/redesign/PrimaryNav.tsx	sidebar n
 packages/desktop-client/src/components/sidebar/PrimaryButtons.tsx	sidebar nav entry
 packages/desktop-client/src/components/CommandBar.tsx	command palette entry
 yarn.lock	generated — always take upstream's and reinstall
+packages/component-library/src/themes/source/colors.ts	budget progress-bar colour tokens
+packages/desktop-electron/index.ts	startForkUpdater() call
+packages/desktop-electron/preload.ts	update-ready hooks wired to fork-updater
+packages/component-library/src/themes/source/__snapshots__/resolved.web.test.ts.snap	generated — regenerate with vitest -u after resolving colors.ts

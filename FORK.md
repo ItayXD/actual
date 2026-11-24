@@ -89,9 +89,9 @@ name** — `fork-desktop.yml` and `fork-sync.yml` — and must not be a `fork-*`
 
 ### The one-time GitHub settings
 
-None of these is code, and the workflow cannot do any of them for itself. All three are
-already applied — this records what they are and why, since none is discoverable from the
-repo.
+None of these is code, and the workflow cannot do any of them for itself. The first three
+are already applied — this records what they are and why, since none is discoverable from
+the repo.
 
 1. **The default branch must be `fork/main`.** GitHub runs `schedule` and
    `workflow_dispatch` only from the default branch, and `master` here is a pristine
@@ -110,6 +110,14 @@ repo.
    deliberately left at **read** — the workflow declares the writes it needs in its own
    `permissions:` block, which is enough (its pushes worked while the repo default was
    read).
+4. **Add a `FORK_SYNC_TOKEN` secret.** `GITHUB_TOKEN` can never push a commit that
+   touches `.github/workflows/`, and nearly every upstream release does: every nightly
+   run from 2026-10-29 failed with _refusing to allow a GitHub App to create or update
+   workflow … without `workflows` permission_ until GitHub auto-disabled the schedule.
+   Create a fine-grained PAT scoped to `ItayXD/actual` only, with **Contents**, **Pull
+   requests** and **Workflows** set to read/write, and store it as the repository secret
+   `FORK_SYNC_TOKEN`. The workflow falls back to `GITHUB_TOKEN` without it, so syncs that
+   touch no workflow file still land. Syncing locally and pushing over SSH always works.
 
 Watch out for two traps that cost a run each when this was first switched on:
 
@@ -142,7 +150,7 @@ Watch out for two traps that cost a run each when this was first switched on:
    - Dashboard layout: a new widget `type` string plus JSON in the existing
      `dashboard.meta` column.
    - Local-only: metadata prefs (`save-prefs`) / global prefs (`save-global-prefs`).
-5. **Never touch `SYNC_FORMAT_VERSION`** (`sync-server/src/app-sync/validation.js`) or the
+5. **Never touch `SYNC_FORMAT_VERSION`** (`sync-server/src/app-sync/validation.ts`) or the
    `X-ACTUAL-FORMAT` header (`loot-core/src/server/cloud-storage.ts`).
 6. **Don't modify the `sync-server` package.** PikaPods runs vanilla; changes here are dead
    code that only add merge conflicts.
@@ -372,3 +380,40 @@ the change afterwards, so `packages/desktop-electron/package.json` stays clean
 the suffix, so the fork compares equal to the upstream release it was built
 from: no false "you're outdated" nag, but you still get notified when upstream
 ships a new version. Settings → _Client version_ shows the full string.
+
+That upstream notice is kept on purpose: it is the early warning that PikaPods is
+about to move the server forward (see _Migration direction is the real trap_).
+
+### Self-updates from the fork
+
+Installed fork builds update themselves from **this fork's** GitHub releases, never
+upstream's. `packages/desktop-electron/fork-updater.ts` checks
+`ItayXD/actual` releases 30 s after launch and every 6 h, downloads the installer for
+the running platform/arch, and verifies its size and GitHub's SHA-256 `digest`. Then
+upstream's own web-app hooks (`isUpdateReadyForDownload` / `applyAppUpdate`, stubbed
+out in upstream's Electron preload, wired up in the fork's) raise upstream's _"A new
+version of Actual is available! — Update now"_ notification, so desktop-client carries
+no updater code at all.
+
+- **macOS**: copies `Actual.app` out of the DMG next to the installed bundle, quits,
+  and a detached script swaps the bundles and reopens the app. If the bundle can't be
+  replaced in place (not writable, or App Translocation), it opens the DMG instead.
+- **Windows**: runs the NSIS installer with `--updated /S --force-run` and quits.
+- Linux and dev builds never update. `ACTUAL_FORK_UPDATES=off` disables it.
+
+Ordering comes from the tag: a release is always `fork-v<exact app version>` (e.g.
+`fork-v26.11.0-fork.202611232130`), compared by upstream version, then build time. Old
+tags like `fork-v1.2` are ignored. A vanilla build is never "updated" into the fork.
+
+To ship a build:
+
+```bash
+gh workflow run fork-desktop.yml -R ItayXD/actual -f make_release=true
+```
+
+`Fork Upstream Sync` runs the same thing after every sync it auto-merges, so an uneventful
+upstream release reaches the installed app with nobody touching it. After a sync you
+resolved locally, run it yourself once the merge is pushed.
+
+The first install of an unsigned build still needs the quarantine steps above; updates
+don't, because the app downloads them itself and nothing quarantines them.

@@ -114,20 +114,22 @@ else
   pass 5 "X-ACTUAL-FORMAT unchanged ($base_format)"
 fi
 
+# validation.js became validation.ts in 26.11.0; read whichever the ref has.
 sync_version() {
-  git show "$1:packages/sync-server/src/app-sync/validation.js" 2>/dev/null |
+  { git show "$1:packages/sync-server/src/app-sync/validation.ts" ||
+    git show "$1:packages/sync-server/src/app-sync/validation.js"; } 2>/dev/null |
     sed -n 's/.*SYNC_FORMAT_VERSION *= *\([0-9]*\).*/\1/p' | head -1
 }
 base_sync=$(sync_version "$base")
 head_sync=$(sync_version "$head")
 if [ -z "$base_sync" ]; then
   report 5 \
-    "cannot read SYNC_FORMAT_VERSION on $base — validation.js changed shape, update this check" \
-    "packages/sync-server/src/app-sync/validation.js"
+    "cannot read SYNC_FORMAT_VERSION on $base — validation.ts changed shape, update this check" \
+    "packages/sync-server/src/app-sync/validation.ts"
 elif [ "$base_sync" != "$head_sync" ]; then
   report 5 \
     "the fork changes SYNC_FORMAT_VERSION ($base_sync -> ${head_sync:-missing})" \
-    "packages/sync-server/src/app-sync/validation.js"
+    "packages/sync-server/src/app-sync/validation.ts"
 else
   pass 5 "SYNC_FORMAT_VERSION unchanged ($base_sync)"
 fi

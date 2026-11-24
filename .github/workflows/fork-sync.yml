@@ -89,6 +89,14 @@ jobs:
           fetch-depth: 0
           # Unlike fork-desktop.yml, this workflow pushes, so credentials stay.
           persist-credentials: true
+          # GITHUB_TOKEN can never push a commit that touches .github/workflows
+          # (there is no `workflows` permission for it), and almost every
+          # upstream release does — that failed every run from 2026-10-29 to
+          # 2026-11-08 until the schedule was auto-disabled. FORK_SYNC_TOKEN is a
+          # fine-grained PAT for this repo only, with Contents, Pull requests and
+          # Workflows set to read/write. Without it, a release that changes no
+          # workflow still syncs.
+          token: ${{ secrets.FORK_SYNC_TOKEN || github.token }}
 
       - name: Fetch upstream
         run: |
@@ -154,8 +162,14 @@ jobs:
       - name: Advance the master mirror
         if: steps.detect.outputs.sync == 'true'
         run: |
-          if ! git push origin upstream/master:refs/heads/master; then
-            echo "::error::master is not a fast-forward of upstream/master — something was committed to it. FORK.md requires it to stay a pristine mirror. Inspect: git log --oneline upstream/master..origin/master"
+          if ! out=$(git push origin upstream/master:refs/heads/master 2>&1); then
+            echo "$out"
+            case "$out" in
+              *'without `workflows` permission'*)
+                echo "::error::Upstream changed a workflow file, which GITHUB_TOKEN may not push. Add the FORK_SYNC_TOKEN secret (see the checkout step), or sync locally with bin/fork-sync and push over SSH." ;;
+              *)
+                echo "::error::master is not a fast-forward of upstream/master — something was committed to it. FORK.md requires it to stay a pristine mirror. Inspect: git log --oneline upstream/master..origin/master" ;;
+            esac
             exit 1
           fi
 
@@ -228,7 +242,7 @@ jobs:
           check_zone 'upload format handshake (rule 5)' 'packages/loot-core/src/server/cloud-storage.ts'
           check_zone 'CRDT message application (rules 2, 3)' 'packages/loot-core/src/server/sync/index.ts'
           check_zone 'migration validity check (rule 1)' 'packages/loot-core/src/server/migrate/migrations.ts'
-          check_zone 'sync server validation (rules 5, 6)' 'packages/sync-server/src/app-sync/validation.js'
+          check_zone 'sync server validation (rules 5, 6)' 'packages/sync-server/src/app-sync/validation.ts'
           [ "$found" -eq 0 ] && echo "_None — upstream touched no sync-critical path._" >>"$report"
           echo >>"$report"
 
@@ -386,7 +400,8 @@ jobs:
           && steps.pr.outputs.number != ''
           && (github.event_name == 'schedule' || inputs.auto_merge)
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Merging a PR that touches workflow files needs the PAT too.
+          GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           # --merge, never squash or rebase: fork/main must record a real merge
           # commit so the next sync's merge base is correct (FORK.md 'Branches').
@@ -405,6 +420,15 @@ jobs:
             echo "merged=false" >>"$GITHUB_OUTPUT"
             echo "::warning::Everything passed but the merge was refused — check branch protection or a required review on fork/main."
           fi
+
+      # Ship it: installed fork builds update themselves from the release this
+      # starts (fork-desktop.yml -> fork-updater.ts). workflow_dispatch is the
+      # one event GITHUB_TOKEN is allowed to start another workflow with.
+      - name: Release the merged build
+        if: steps.automerge.outputs.merged == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow run fork-desktop.yml --ref fork/main -f make_release=true
 
       # FORK.md: newly added upstream workflows arrive enabled, and every one of
       # them targets depot-* runners that never resolve in a fork — so they queue

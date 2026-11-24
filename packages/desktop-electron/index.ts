@@ -38,6 +38,7 @@ import {
   getLastFileDialogFolder,
   rememberFileDialogSelection,
 } from './file-dialog-folder';
+import { startForkUpdater } from './fork-updater';
 import { getMenu } from './menu';
 import { retry as promiseRetry } from './retry';
 import type { AppInitFailurePayload } from './server';
@@ -687,6 +688,9 @@ app.on('ready', async () => {
   if (process.argv[1] !== '--server') {
     await createWindow();
   }
+
+  // fork: install new builds from this fork's own releases (fork-updater.ts)
+  startForkUpdater({ enabled: !isDev && !isPlaywrightTest, log: logMessage });
 
   // This is mainly to aid debugging Sentry errors - it will add a
   // breadcrumb

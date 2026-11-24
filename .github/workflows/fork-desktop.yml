@@ -18,6 +18,13 @@
 # On a private fork, macOS runner minutes bill at a 10x multiplier — building
 # the Mac app locally with bin/fork-build-mac and using CI only for Windows is
 # usually the cheaper split.
+#
+# Releases feed the in-app updater (packages/desktop-electron/fork-updater.ts).
+# It reads the version straight off the tag, so a release is always tagged
+# `fork-v<exact app version>`, e.g. fork-v26.11.0-fork.202611232130. The
+# `prepare` job computes that version once so both legs stamp the same one.
+# Cut a release with `gh workflow run fork-desktop.yml -f make_release=true
+# -R ItayXD/actual`; Fork Upstream Sync does it after each auto-merged sync.
 name: Fork Desktop Build
 
 # bin/package-electron is a bash script, and the Windows runner defaults to
@@ -46,7 +53,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      release: ${{ steps.version.outputs.release }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - id: version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/fork-v') }}
+          MAKE_RELEASE: ${{ inputs.make_release }}
+        run: |
+          BASE=$(node -p "require('./packages/desktop-electron/package.json').version")
+          if [ "$IS_TAG" = "true" ]; then
+            VERSION=${REF_NAME#fork-v}
+            if ! [[ "$VERSION" =~ ^${BASE//./\\.}-fork\.[0-9]+$ ]]; then
+              echo "::error::Tag $REF_NAME must be fork-v${BASE}-fork.<UTC YYYYMMDDHHMM> - the updater reads the version from it"
+              exit 1
+            fi
+            RELEASE=true
+          else
+            VERSION="${BASE}-fork.$(date -u +%Y%m%d%H%M)"
+            RELEASE=${MAKE_RELEASE:-false}
+          fi
+          echo "Building $VERSION (release: $RELEASE)"
+          {
+            echo "version=$VERSION"
+            echo "tag=fork-v$VERSION"
+            echo "release=$RELEASE"
+          } >>"$GITHUB_OUTPUT"
+
   build:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -79,8 +122,7 @@ jobs:
 
       - name: Stamp fork version
         run: |
-          BASE=$(node -p "require('./packages/desktop-electron/package.json').version")
-          npm version "${BASE}-fork.$(date -u +%Y%m%d%H%M)" \
+          npm version "${{ needs.prepare.outputs.version }}" \
             --no-git-tag-version \
             --workspace=desktop-electron \
             --no-workspaces-update
@@ -108,10 +150,10 @@ jobs:
             packages/desktop-electron/dist/*.exe
 
       - name: Publish release
-        if: ${{ startsWith(github.ref, 'refs/tags/fork-v') || inputs.make_release }}
+        if: ${{ needs.prepare.outputs.release == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ startsWith(github.ref, 'refs/tags/fork-v') && github.ref_name || format('fork-v0.0.0-{0}', github.run_number) }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           # Collect only what this leg actually built. Globbing both .dmg and
           # .exe unconditionally left one pattern unexpanded on each runner, so
@@ -131,10 +173,11 @@ jobs:
 
           # Both matrix legs reach here, so tolerate the other having created
           # the release first — but never tolerate a failed upload.
+          # --target pins a dispatch-created tag to the commit that was built.
           gh release create "$TAG" \
-            --title "Actual (fork) $TAG" \
-            --notes "Unsigned personal build. On macOS: xattr -d com.apple.quarantine the DMG before opening. On Windows: More info -> Run anyway." \
-            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Actual (fork) ${TAG#fork-v}" \
+            --notes "Unsigned personal build. Installed fork builds pick this up by themselves (Update now). For a first install on macOS: xattr -d com.apple.quarantine the DMG before opening. On Windows: More info -> Run anyway." \
             || gh release view "$TAG" >/dev/null
 
           gh release upload "$TAG" --clobber "${installers[@]}"
